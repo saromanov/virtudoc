@@ -110,6 +110,9 @@ without stdio support: `virtudoc serve --http [port]` (default port 8765).
 
 Supported formats: Markdown (`.md`, `.mdx`), reStructuredText (`.rst`),
 plain text (`.txt`), HTML (`.html`, `.htm`, best-effort text extraction).
+Hidden files and directories are always skipped; a `.virtudocignore` file at
+the source root (`.gitignore`-compatible syntax: globs, `**`, `!` negation,
+directory patterns) excludes generated or vendor trees from indexing.
 
 ## How it works
 
