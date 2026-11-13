@@ -4,6 +4,7 @@ import difflib
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..db import fts_normalize
 from ..tokens import estimate_tokens, truncate_to_tokens
@@ -106,6 +107,7 @@ def _fetch_candidates(
     match: str,
     library_id: str | None,
     limit: int,
+    section: str | None = None,
 ) -> list[sqlite3.Row]:
     sql = """
         SELECT c.id, c.heading_path, c.text, c.token_est, d.rel_path,
@@ -119,6 +121,9 @@ def _fetch_candidates(
     if library_id:
         sql += " AND c.library_id = ?"
         params.append(library_id)
+    if section:
+        sql += " AND (c.heading_path = ? OR substr(c.heading_path, 1, length(?) + 3) = ? || ' → ')"
+        params.extend([section, section, section])
     sql += " ORDER BY rank LIMIT ?"
     params.append(limit)
     return conn.execute(sql, params).fetchall()
@@ -138,6 +143,7 @@ def search(
     max_results: int = 20,
     page: int = 1,
     language: str | None = None,
+    section: str | None = None,
 ) -> SearchResult:
     tokens = tokenize(query)
     result = SearchResult(query=query, page=page)
@@ -145,15 +151,19 @@ def search(
         return result
 
     candidates = _fetch_candidates(
-        conn, _and_expression(tokens), library_id, max_results * 3 * page
+        conn, _and_expression(tokens), library_id, max_results * 3 * page, section
     )
     if not candidates:
         candidates = _fetch_candidates(
-            conn, _and_expression(tokens, prefix=True), library_id, max_results * 3 * page
+            conn,
+            _and_expression(tokens, prefix=True),
+            library_id,
+            max_results * 3 * page,
+            section,
         )
     if not candidates:
         candidates = _fetch_candidates(
-            conn, _or_expression(tokens), library_id, max_results * 3 * page
+            conn, _or_expression(tokens), library_id, max_results * 3 * page, section
         )
 
     scored: list[tuple[float, sqlite3.Row]] = []
@@ -282,3 +292,69 @@ def top_level_sections(
         hint.chunk_count += row[1]
         hint.token_est += row[2] or 0
     return sorted(roots.values(), key=lambda hint: hint.chunk_count, reverse=True)[:limit]
+
+
+@dataclass
+class OutlineNode:
+    section: str
+    path: str
+    chunk_count: int = 0
+    token_est: int = 0
+    children: list[OutlineNode] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section": self.section,
+            "path": self.path,
+            "chunk_count": self.chunk_count,
+            "token_est": self.token_est,
+            "children": [child.to_dict() for child in self.children],
+        }
+
+
+def library_outline(
+    conn: sqlite3.Connection,
+    library_id: str,
+    *,
+    section: str | None = None,
+) -> list[OutlineNode]:
+    rows = conn.execute(
+        """
+        SELECT heading_path, COUNT(*), COALESCE(SUM(token_est), 0)
+        FROM chunks WHERE library_id = ?
+        GROUP BY heading_path ORDER BY heading_path
+        """,
+        (library_id,),
+    ).fetchall()
+
+    nodes: dict[str, OutlineNode] = {}
+    top: list[OutlineNode] = []
+    for path, count, tokens in rows:
+        if section and path != section and not path.startswith(section + " → "):
+            continue
+        parts = path.split(" → ") if path else ["(no section)"]
+        for index, part in enumerate(parts):
+            prefix = " → ".join(parts[: index + 1])
+            node = nodes.get(prefix)
+            if node is None:
+                node = OutlineNode(section=part, path=prefix)
+                nodes[prefix] = node
+                parent_path = " → ".join(parts[:index])
+                parent = nodes.get(parent_path)
+                (parent.children if parent else top).append(node)
+        node.chunk_count += count
+        node.token_est += tokens
+
+    def aggregate(node: OutlineNode) -> tuple[int, int]:
+        child_chunks, child_tokens = 0, 0
+        for child in node.children:
+            chunks, tokens = aggregate(child)
+            child_chunks += chunks
+            child_tokens += tokens
+        node.chunk_count += child_chunks
+        node.token_est += child_tokens
+        return node.chunk_count, node.token_est
+
+    for node in top:
+        aggregate(node)
+    return top

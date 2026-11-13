@@ -14,7 +14,7 @@ from .indexer.chunker import Chunker
 from .indexer.indexer import index_library
 from .logging_setup import get_logger
 from .notes import relevant_notes
-from .search.engine import resolve_libraries, search, top_level_sections
+from .search.engine import library_outline, resolve_libraries, search, top_level_sections
 
 logger = get_logger("mcp")
 
@@ -28,12 +28,14 @@ RESOLVE_DESCRIPTION = (
 )
 
 GET_DOCS_DESCRIPTION = (
-    "Get documentation fragments of a library for the agent's question or task. "
+    "Get documentation of a library for the agent's question or task. "
     "Use a focused query with keywords (library terminology works better than "
     "full sentences). Output is assembled under a token budget; use page=2 to "
     "continue. Fragments contain Markdown text, the heading path and the source "
     "file path. If nothing is found, the response contains top-level sections "
-    "of the library to help rephrase the query."
+    "of the library to help rephrase the query. Use mode='outline' to get the "
+    "section tree with token estimates instead of fragments, and 'section' to "
+    "restrict the output to one branch (e.g. 'API -> Middleware')."
 )
 
 
@@ -86,8 +88,8 @@ def build_server(config: Config) -> MCPServer:
         mode: str = "fragments",
         section: str | None = None,
     ) -> dict[str, Any]:
-        if mode != "fragments":
-            raise ToolError(f"unsupported mode: {mode!r}; supported: 'fragments'")
+        if mode not in ("fragments", "outline"):
+            raise ToolError(f"unsupported mode: {mode!r}; supported: 'fragments', 'outline'")
         budget = min(max(tokens, 100), MAX_TOKENS_HARD_LIMIT)
         page = max(page, 1)
         with connect() as conn:
@@ -97,15 +99,6 @@ def build_server(config: Config) -> MCPServer:
                     f"library not found: {libraryId!r}; "
                     "call resolve-library-id to list available libraries"
                 )
-            result = search(
-                conn,
-                query,
-                library_id=libraryId,
-                token_budget=budget,
-                max_results=config.get_int("search.max_results"),
-                page=page,
-                language=language,
-            )
             notes = [
                 {"id": note.id, "text": note.text, "created_at": note.created_at}
                 for note in relevant_notes(
@@ -115,6 +108,27 @@ def build_server(config: Config) -> MCPServer:
                     budget_tokens=config.get_int("notes.max_tokens"),
                 )
             ]
+            if mode == "outline":
+                tree = library_outline(conn, libraryId, section=section)
+                return {
+                    "library_id": libraryId,
+                    "query": query,
+                    "mode": "outline",
+                    "section": section,
+                    "sections": [node.to_dict() for node in tree],
+                    "notes": notes,
+                    "total_tokens": sum(node.token_est for node in tree),
+                }
+            result = search(
+                conn,
+                query,
+                library_id=libraryId,
+                token_budget=budget,
+                max_results=config.get_int("search.max_results"),
+                page=page,
+                language=language,
+                section=section,
+            )
             if not result.snippets:
                 return {
                     "library_id": libraryId,

@@ -1,4 +1,4 @@
-from virtudoc.search.engine import search, tokenize
+from virtudoc.search.engine import library_outline, search, tokenize
 
 
 def test_tokenize_normalizes_yo():
@@ -69,3 +69,44 @@ def test_search_in_cyrillic_text(indexed, conn):
     result = search(conn, "очередь подписчикам")
     assert result.snippets
     assert result.snippets[0].source == "queue.txt"
+
+
+def test_search_section_filter(indexed, conn):
+    result = search(conn, "исключения", section="Руководство → API → Ошибки")
+    assert result.snippets
+    assert all(
+        s.heading_path == "Руководство → API → Ошибки"
+        or s.heading_path.startswith("Руководство → API → Ошибки →")
+        for s in result.snippets
+    )
+    unfiltered = search(conn, "исключения")
+    assert any(s.heading_path.startswith("Руководство → API") for s in unfiltered.snippets)
+
+
+def test_library_outline_tree(indexed, conn):
+    tree = library_outline(conn, "local/demo")
+    roots = {node.section: node for node in tree}
+    assert "Руководство" in roots
+    guide = roots["Руководство"]
+    api = next(n for n in guide.children if n.section == "API")
+    middleware = next(n for n in api.children if n.section == "Middleware")
+    assert middleware.chunk_count >= 1
+    assert middleware.token_est > 0
+    # parent aggregates children
+    assert api.chunk_count >= middleware.chunk_count
+    assert guide.token_est >= api.token_est
+
+
+def test_library_outline_section_filter(indexed, conn):
+    tree = library_outline(conn, "local/demo", section="Руководство → API")
+    assert len(tree) == 1
+    assert tree[0].section == "Руководство"
+    assert len(tree[0].children) == 1
+    assert tree[0].children[0].section == "API"
+
+
+def test_library_outline_dict_shape(indexed, conn):
+    tree = library_outline(conn, "local/demo")
+    payload = tree[0].to_dict()
+    assert set(payload) == {"section", "path", "chunk_count", "token_est", "children"}
+    assert payload["path"]

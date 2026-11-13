@@ -178,6 +178,40 @@ async def test_mcp_get_library_docs_includes_relevant_notes(home, docs_dir):
 
 
 @pytest.mark.anyio
+async def test_mcp_outline_mode_and_section_filter(home_index):
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": "local/demo", "query": "middleware", "mode": "outline"},
+            )
+            payload = _payload(result)
+            assert payload["mode"] == "outline"
+            roots = {node["section"]: node for node in payload["sections"]}
+            guide = roots["Руководство"]
+            api = next(n for n in guide["children"] if n["section"] == "API")
+            assert api["chunk_count"] >= 1
+            assert api["token_est"] > 0
+
+            filtered = await session.call_tool(
+                "get-library-docs",
+                {
+                    "libraryId": "local/demo",
+                    "query": "исключения",
+                    "section": "Руководство → API → Ошибки",
+                },
+            )
+            fpayload = _payload(filtered)
+            assert fpayload["snippets"]
+            assert all(
+                s["heading_path"] == "Руководство → API → Ошибки"
+                or s["heading_path"].startswith("Руководство → API → Ошибки →")
+                for s in fpayload["snippets"]
+            )
+
+
+@pytest.mark.anyio
 async def test_mcp_empty_search_returns_section_hints(home_index):
     async with stdio_client(_server_params(home_index)) as (read, write):
         async with ClientSession(read, write) as session:

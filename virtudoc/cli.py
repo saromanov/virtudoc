@@ -20,7 +20,7 @@ from .indexer.indexer import (
 )
 from .logging_setup import setup_logging
 from .notes import add_note, list_notes, relevant_notes, remove_note
-from .search.engine import search
+from .search.engine import library_outline, search
 
 
 def _chunker_from_config(cfg: Config) -> Chunker:
@@ -139,12 +139,23 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             except LibraryNotFoundError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
+        if args.outline:
+            if not library_id:
+                print("error: --outline requires --name", file=sys.stderr)
+                return 1
+            tree = library_outline(conn, library_id, section=args.section)
+            print(
+                f"outline of {library_id}" + (f" (section: {args.section})" if args.section else "")
+            )
+            _print_outline(tree)
+            return 0
         result = search(
             conn,
             args.query,
             library_id=library_id,
             token_budget=args.tokens or cfg.get_int("search.default_tokens"),
             max_results=cfg.get_int("search.max_results"),
+            section=args.section,
         )
         notes = []
         if library_id:
@@ -173,6 +184,14 @@ def cmd_serve(args: argparse.Namespace, cfg: Config) -> int:
     from .mcp_server import run_serve
 
     return run_serve(cfg, http=args.http)
+
+
+def _print_outline(nodes, indent: int = 0) -> None:
+    for node in nodes:
+        print(
+            f"{'  ' * indent}- {node.section} ({node.chunk_count} chunks, ~{node.token_est} tokens)"
+        )
+        _print_outline(node.children, indent + 1)
 
 
 def cmd_note_add(args: argparse.Namespace, cfg: Config) -> int:
@@ -249,6 +268,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", help="search query")
     p.add_argument("--name", help="restrict the search to one library")
     p.add_argument("--tokens", type=int, help="token budget for the output")
+    p.add_argument(
+        "--section", help="restrict the output to a section branch (e.g. 'API -> Middleware')"
+    )
+    p.add_argument(
+        "--outline",
+        action="store_true",
+        help="print the section tree instead of fragments (requires --name)",
+    )
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("serve", help="start the MCP server")
