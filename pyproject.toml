@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "markdown-it-py>=3.0,<4",
+    "mcp>=2.3,<3",
 ]
 
 [project.optional-dependencies]

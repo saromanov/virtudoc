@@ -1,3 +1,5 @@
+import pytest
+
 from virtudoc.cli import main
 
 
@@ -43,9 +45,12 @@ def test_search_unknown_library(home, capsys):
     assert "not found" in capsys.readouterr().err
 
 
-def test_serve_stub(home, capsys):
-    assert main(["serve"]) == 2
-    assert "M2" in capsys.readouterr().err
+def test_serve_help(home, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["serve", "--help"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "--http" in out
 
 
 def test_remove_requires_confirmation(home, docs_dir, capsys, monkeypatch):

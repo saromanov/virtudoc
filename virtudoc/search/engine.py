@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ class Snippet:
 @dataclass
 class SearchResult:
     query: str
+    page: int = 1
     snippets: list[Snippet] = field(default_factory=list)
     total_tokens: int = 0
 
@@ -134,29 +136,38 @@ def search(
     library_id: str | None = None,
     token_budget: int = 5000,
     max_results: int = 20,
+    page: int = 1,
+    language: str | None = None,
 ) -> SearchResult:
     tokens = tokenize(query)
-    result = SearchResult(query=query)
+    result = SearchResult(query=query, page=page)
     if not tokens:
         return result
 
-    candidates = _fetch_candidates(conn, _and_expression(tokens), library_id, max_results * 3)
+    candidates = _fetch_candidates(
+        conn, _and_expression(tokens), library_id, max_results * 3 * page
+    )
     if not candidates:
         candidates = _fetch_candidates(
-            conn, _and_expression(tokens, prefix=True), library_id, max_results * 3
+            conn, _and_expression(tokens, prefix=True), library_id, max_results * 3 * page
         )
     if not candidates:
-        candidates = _fetch_candidates(conn, _or_expression(tokens), library_id, max_results * 3)
+        candidates = _fetch_candidates(
+            conn, _or_expression(tokens), library_id, max_results * 3 * page
+        )
 
     scored: list[tuple[float, sqlite3.Row]] = []
     for position, row in enumerate(candidates):
         base = 1.0 / (position + 1)
         score = base + (TOPIC_BONUS if _topic_boost(row, tokens) else 0.0)
+        if language and f"```{language}" in row["text"]:
+            score += 0.15
         scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
 
     remaining = token_budget
-    for score, row in scored:
+    offset = (page - 1) * max_results
+    for score, row in scored[offset:]:
         if len(result.snippets) >= max_results:
             break
         text = row["text"]
@@ -175,3 +186,99 @@ def search(
         remaining -= snippet.tokens
     result.total_tokens = sum(s.tokens for s in result.snippets)
     return result
+
+
+@dataclass
+class LibraryMatch:
+    id: str
+    name: str
+    description: str | None
+    chunk_count: int
+    updated_at: str
+    score: float
+
+
+def resolve_libraries(
+    conn: sqlite3.Connection,
+    library_name: str,
+    query: str,
+    *,
+    limit: int = 5,
+) -> list[LibraryMatch]:
+    rows = conn.execute(
+        """
+        SELECT l.id, l.name, l.description, l.updated_at,
+               (SELECT COUNT(*) FROM chunks c WHERE c.library_id = l.id) AS chunk_count
+        FROM libraries l
+        """
+    ).fetchall()
+    if not rows:
+        return []
+
+    hits: dict[str, int] = {}
+    tokens = tokenize(query)
+    if tokens:
+        for row in conn.execute(
+            """
+            SELECT c.library_id, COUNT(*) FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            WHERE chunks_fts MATCH ?
+            GROUP BY c.library_id
+            """,
+            (_or_expression(tokens),),
+        ):
+            hits[row[0]] = row[1]
+
+    needle = library_name.strip().lower()
+    scored: list[tuple[float, sqlite3.Row]] = []
+    for row in rows:
+        name = row["name"].lower()
+        if needle and needle == name:
+            score = 3.0
+        elif needle and (needle in name or name in needle):
+            score = 2.0
+        else:
+            score = difflib.SequenceMatcher(None, needle, name).ratio() if needle else 0.0
+        if row["id"] in hits:
+            score += min(2.0, hits[row["id"]] / 10)
+        scored.append((score, row))
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    matches = [(score, row) for score, row in scored if score >= 0.5 or row["id"] in hits]
+    return [
+        LibraryMatch(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            chunk_count=row["chunk_count"],
+            updated_at=row["updated_at"],
+            score=round(score, 4),
+        )
+        for score, row in matches[:limit]
+    ]
+
+
+@dataclass
+class SectionHint:
+    section: str
+    chunk_count: int
+    token_est: int
+
+
+def top_level_sections(
+    conn: sqlite3.Connection, library_id: str, *, limit: int = 20
+) -> list[SectionHint]:
+    roots: dict[str, SectionHint] = {}
+    for row in conn.execute(
+        """
+        SELECT heading_path, COUNT(*), SUM(token_est) FROM chunks
+        WHERE library_id = ? AND heading_path != ''
+        GROUP BY heading_path
+        """,
+        (library_id,),
+    ):
+        root = row[0].split(" → ")[0].strip()
+        hint = roots.setdefault(root, SectionHint(root, 0, 0))
+        hint.chunk_count += row[1]
+        hint.token_est += row[2] or 0
+    return sorted(roots.values(), key=lambda hint: hint.chunk_count, reverse=True)[:limit]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +51,7 @@ class Config:
                 for key, val in vals.items():
                     full = f"{section}.{key}"
                     if full not in _FLAT_DEFAULTS:
-                        print(f"warning: unknown configuration key '{full}'")
+                        print(f"warning: unknown configuration key '{full}'", file=sys.stderr)
                         continue
                     cfg.values[full] = val
         return cfg

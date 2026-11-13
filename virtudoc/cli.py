@@ -157,8 +157,9 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
 
 
 def cmd_serve(args: argparse.Namespace, cfg: Config) -> int:
-    print("the serve command will be implemented in milestone M2 (MCP server)", file=sys.stderr)
-    return 2
+    from .mcp_server import run_serve
+
+    return run_serve(cfg, http=args.http)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -194,7 +195,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tokens", type=int, help="token budget for the output")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("serve", help="start the MCP server (milestone M2)")
+    p = sub.add_parser("serve", help="start the MCP server")
+    p.add_argument(
+        "--http",
+        nargs="?",
+        const=True,
+        default=False,
+        type=int,
+        metavar="PORT",
+        help="use streamable HTTP on 127.0.0.1 (default port: config server.http_port)",
+    )
     p.set_defaults(func=cmd_serve)
 
     return parser
