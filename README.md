@@ -48,6 +48,10 @@ virtudoc doctor   # config, sources, index integrity, version drift summary
 
 # Pull public documentation from a git URL or archive (the only networked command)
 virtudoc fetch --repo https://github.com/org/docs --name theirlib
+
+# Move your whole setup to another machine (see docs/installation.md)
+virtudoc export            # dump the library list to ~/.virtudoc/libraries.toml
+virtudoc import            # register and index everything from the file
 ```
 
 ## Connect your agent

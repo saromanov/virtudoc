@@ -106,3 +106,14 @@ Starts the MCP server: stdio by default, or streamable HTTP on
 `127.0.0.1:PORT` with `--http` (default port from config, 8765). Before
 announcing tools, all libraries are reindexed incrementally. See
 [MCP integration](mcp.md).
+
+## export / import — move the setup between machines
+
+```bash
+virtudoc export [path]   # default: ~/.virtudoc/libraries.toml
+virtudoc import [path]
+```
+
+`export` dumps the library list (names, paths, versions) to a TOML file.
+`import` registers and indexes every entry, replacing same-named libraries —
+safe to re-run. See [Team bootstrap](installation.md#team-bootstrap-one-file-one-command).

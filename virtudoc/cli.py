@@ -308,6 +308,75 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     return 0 if stats.errors == 0 else 1
 
 
+def cmd_export(args: argparse.Namespace, cfg: Config) -> int:
+    import json
+
+    with _open(cfg) as conn:
+        rows = list_libraries(conn)
+    lines = [
+        "# VirtuDoc libraries — restore with: virtudoc import",
+        "# Paths are absolute; adjust after moving between machines if needed.",
+        "",
+    ]
+    for row in rows:
+        lines.append("[[libraries]]")
+        lines.append(f"name = {json.dumps(row['name'], ensure_ascii=False)}")
+        lines.append(f"path = {json.dumps(row['source_path'], ensure_ascii=False)}")
+        if row["version"]:
+            lines.append(f"version = {json.dumps(row['version'], ensure_ascii=False)}")
+        lines.append("")
+    out = Path(args.path) if args.path else data_dir() / "libraries.toml"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"exported {len(rows)} libraries to {out}")
+    return 0
+
+
+def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
+    import tomllib
+
+    path = Path(args.path) if args.path else data_dir() / "libraries.toml"
+    if not path.is_file():
+        print(f"error: setup file not found: {path}", file=sys.stderr)
+        return 1
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        print(f"error: cannot parse {path}: {exc}", file=sys.stderr)
+        return 1
+    libraries = data.get("libraries", [])
+    if not libraries:
+        print(f"no libraries in {path}")
+        return 0
+    chunker = _chunker_from_config(cfg)
+    imported, failed = 0, 0
+    with _open(cfg) as conn:
+        for lib in libraries:
+            name = str(lib.get("name", ""))
+            source = lib.get("path")
+            if not name or not source:
+                print(f"error: entry without name/path: {lib!r}", file=sys.stderr)
+                failed += 1
+                continue
+            try:
+                lib_id = add_library(
+                    conn,
+                    Path(str(source)),
+                    name,
+                    version=str(lib["version"]) if lib.get("version") else None,
+                    replace=True,
+                )
+                stats = index_library(conn, lib_id, chunker)
+            except (LibraryExistsError, ValueError, OSError) as exc:
+                print(f"error: {name}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            imported += 1
+            print(f"{lib_id}: {stats.summary()}")
+    print(f"imported: {imported}, failed: {failed}")
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="virtudoc",
@@ -400,6 +469,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", help="documentation version")
     p.add_argument("--replace", action="store_true", help="replace an existing library")
     p.set_defaults(func=cmd_fetch)
+
+    p = sub.add_parser("export", help="dump the library list to a TOML setup file")
+    p.add_argument("path", nargs="?", help="output file (default: ~/.virtudoc/libraries.toml)")
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("import", help="register and index libraries from a TOML setup file")
+    p.add_argument("path", nargs="?", help="setup file (default: ~/.virtudoc/libraries.toml)")
+    p.set_defaults(func=cmd_import)
 
     return parser
 

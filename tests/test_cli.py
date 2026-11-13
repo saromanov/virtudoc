@@ -113,3 +113,73 @@ def test_doctor_reports_missing_source(home, docs_dir, capsys):
     assert main(["doctor"]) == 1
     out = capsys.readouterr().out
     assert "source directory missing" in out
+
+
+def test_export_import_roundtrip(home, docs_dir, tmp_path, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo", "--version", "1.0"]) == 0
+    capsys.readouterr()
+    setup = tmp_path / "setup.toml"
+    assert main(["export", str(setup)]) == 0
+    text = setup.read_text(encoding="utf-8")
+    assert 'name = "demo"' in text
+    assert 'version = "1.0"' in text
+    assert str(docs_dir) in text
+
+    assert main(["remove", "demo", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["import", str(setup)]) == 0
+    out = capsys.readouterr().out
+    assert "imported: 1, failed: 0" in out
+    assert main(["list"]) == 0
+    assert "local/demo" in capsys.readouterr().out
+
+
+def test_import_is_idempotent(home, docs_dir, tmp_path, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    setup = tmp_path / "setup.toml"
+    main(["export", str(setup)])
+    capsys.readouterr()
+    assert main(["import", str(setup)]) == 0
+    capsys.readouterr()
+    assert main(["import", str(setup)]) == 0
+    assert "imported: 1, failed: 0" in capsys.readouterr().out
+    assert main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("local/demo") == 1
+
+
+def test_import_missing_source_fails_cleanly(home, tmp_path, capsys):
+    setup = tmp_path / "setup.toml"
+    setup.write_text(
+        '[[libraries]]\nname = "ghost"\npath = "/nonexistent/path"\n', encoding="utf-8"
+    )
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "failed: 1" in captured.out
+    assert "source directory not found" in captured.err
+
+
+def test_import_default_path(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["export"]) == 0
+    capsys.readouterr()
+    assert main(["remove", "demo", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["import"]) == 0
+    assert "imported: 1" in capsys.readouterr().out
+
+
+def test_export_escapes_special_characters(home, tmp_path, capsys):
+    weird = tmp_path / 'weird "dir"'
+    weird.mkdir()
+    (weird / "a.md").write_text("# A\n\nТекст.\n", encoding="utf-8")
+    main(["add", str(weird), "--name", "weird"])
+    capsys.readouterr()
+    setup = tmp_path / "setup.toml"
+    assert main(["export", str(setup)]) == 0
+    assert main(["remove", "weird", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["import", str(setup)]) == 0
+    assert "imported: 1, failed: 0" in capsys.readouterr().out
