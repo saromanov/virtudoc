@@ -29,6 +29,7 @@ class ParseError(Exception):
 
 
 _FRONT_MATTER = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", re.S)
+_HTML_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _FORMATTING_CHARS = re.compile(r"[*_`~]")
 
 
@@ -41,6 +42,7 @@ _MD = MarkdownIt("commonmark")
 
 def parse_markdown(text: str) -> ParsedDocument:
     text = _FRONT_MATTER.sub("", text)
+    text = _HTML_BREAK.sub(" ", text)
     lines = text.split("\n")
     tokens = _MD.parse(text)
 

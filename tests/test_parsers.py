@@ -25,6 +25,12 @@ def test_markdown_front_matter_stripped():
     assert "title: X" not in doc.blocks[0].text
 
 
+def test_markdown_html_breaks_cleaned():
+    doc = parse_markdown("# T\n\n| A | B |\n|---|---|\n| x<br/>y | z |\n")
+    assert "<br" not in doc.blocks[1].text
+    assert "x y" in doc.blocks[1].text
+
+
 def test_markdown_preserves_original_text():
     body = "текст с *выделением* и `кодом`"
     doc = parse_markdown(f"# T\n\n{body}\n")
