@@ -50,6 +50,11 @@ start:
 Indexing throughput on a mid-range laptop is in the thousands of files per
 minute, so even large documentation sets reindex quickly.
 
+Parser and chunker improvements only affect newly indexed content —
+unchanged files are skipped by hash. To rebuild existing libraries with the
+current parser and `chunk.*` settings, re-run `virtudoc import` (it replaces
+same-named libraries) or remove and add the library.
+
 ## The SQLite index
 
 All data is one file, `~/.virtudoc/index.db`, in WAL mode:
