@@ -19,6 +19,7 @@ from .indexer.indexer import (
     update_all,
 )
 from .logging_setup import setup_logging
+from .notes import add_note, list_notes, relevant_notes, remove_note
 from .search.engine import search
 
 
@@ -145,6 +146,18 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             token_budget=args.tokens or cfg.get_int("search.default_tokens"),
             max_results=cfg.get_int("search.max_results"),
         )
+        notes = []
+        if library_id:
+            notes = relevant_notes(
+                conn,
+                library_id,
+                args.query,
+                budget_tokens=cfg.get_int("notes.max_tokens"),
+            )
+    if notes:
+        print("=== project notes ===")
+        for note in notes:
+            print(f"[note #{note.id} | {note.created_at}]\n{note.text}\n")
     if not result.snippets:
         print("nothing found; try rephrasing the query with keywords")
         return 0
@@ -160,6 +173,49 @@ def cmd_serve(args: argparse.Namespace, cfg: Config) -> int:
     from .mcp_server import run_serve
 
     return run_serve(cfg, http=args.http)
+
+
+def cmd_note_add(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        note_id = add_note(conn, lib["id"], args.text)
+    print(f"added note #{note_id} to {lib['id']}")
+    return 0
+
+
+def cmd_note_list(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        notes = list_notes(conn, lib["id"])
+    if not notes:
+        print(f"no notes for {lib['id']}")
+        return 0
+    for note in notes:
+        print(f"#{note.id}\t{note.created_at}\t{note.text}")
+    return 0
+
+
+def cmd_note_remove(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        removed = remove_note(conn, lib["id"], args.id)
+    if not removed:
+        print(f"error: note #{args.id} not found in {lib['id']}", file=sys.stderr)
+        return 1
+    print(f"removed note #{args.id} from {lib['id']}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,6 +262,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="use streamable HTTP on 127.0.0.1 (default port: config server.http_port)",
     )
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("note", help="project notes attached to a library")
+    note_sub = p.add_subparsers(dest="note_command", required=True)
+
+    n = note_sub.add_parser("add", help="attach a note to a library")
+    n.add_argument("name", help="library name")
+    n.add_argument("--text", required=True, help="note text")
+    n.set_defaults(func=cmd_note_add)
+
+    n = note_sub.add_parser("list", help="list notes of a library")
+    n.add_argument("name", help="library name")
+    n.set_defaults(func=cmd_note_list)
+
+    n = note_sub.add_parser("remove", help="remove a note from a library")
+    n.add_argument("name", help="library name")
+    n.add_argument("--id", type=int, required=True, help="note id")
+    n.set_defaults(func=cmd_note_remove)
 
     return parser
 

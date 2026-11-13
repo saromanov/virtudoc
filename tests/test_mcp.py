@@ -153,6 +153,31 @@ async def test_mcp_reindex_on_start_serves_fresh_content(home, docs_dir):
 
 
 @pytest.mark.anyio
+async def test_mcp_get_library_docs_includes_relevant_notes(home, docs_dir):
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs_dir, "demo")
+        index_library(conn, lib_id, Chunker())
+        from virtudoc.notes import add_note
+
+        add_note(conn, lib_id, "Team convention: use the middleware pipeline for auth.")
+    async with stdio_client(_server_params(home)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": "local/demo", "query": "middleware auth checks"},
+            )
+            payload = _payload(result)
+            assert payload["notes"], "relevant note expected in output"
+            assert "middleware" in payload["notes"][0]["text"]
+            unrelated = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": "local/demo", "query": "quantum chromodynamics"},
+            )
+            assert _payload(unrelated)["notes"] == []
+
+
+@pytest.mark.anyio
 async def test_mcp_empty_search_returns_section_hints(home_index):
     async with stdio_client(_server_params(home_index)) as (read, write):
         async with ClientSession(read, write) as session:

@@ -13,6 +13,7 @@ from .db import open_db
 from .indexer.chunker import Chunker
 from .indexer.indexer import index_library
 from .logging_setup import get_logger
+from .notes import relevant_notes
 from .search.engine import resolve_libraries, search, top_level_sections
 
 logger = get_logger("mcp")
@@ -105,13 +106,22 @@ def build_server(config: Config) -> MCPServer:
                 page=page,
                 language=language,
             )
+            notes = [
+                {"id": note.id, "text": note.text, "created_at": note.created_at}
+                for note in relevant_notes(
+                    conn,
+                    libraryId,
+                    query,
+                    budget_tokens=config.get_int("notes.max_tokens"),
+                )
+            ]
             if not result.snippets:
                 return {
                     "library_id": libraryId,
                     "query": query,
                     "page": page,
                     "snippets": [],
-                    "notes": [],
+                    "notes": notes,
                     "total_tokens": 0,
                     "message": (
                         "no fragments found; try a keyword query. "
@@ -139,7 +149,7 @@ def build_server(config: Config) -> MCPServer:
                     }
                     for snippet in result.snippets
                 ],
-                "notes": [],
+                "notes": notes,
                 "total_tokens": result.total_tokens,
             }
 

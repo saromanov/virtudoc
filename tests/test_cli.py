@@ -59,3 +59,27 @@ def test_remove_requires_confirmation(home, docs_dir, capsys, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt: "n")
     assert main(["remove", "demo"]) == 0
     assert "cancelled" in capsys.readouterr().out
+
+
+def test_note_lifecycle_in_search_output(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+    assert main(["note", "add", "demo", "--text", "Use middleware for auth checks."]) == 0
+    capsys.readouterr()
+    assert main(["search", "middleware auth", "--name", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "=== project notes ===" in out
+    assert "Use middleware for auth checks." in out
+    assert main(["note", "remove", "demo", "--id", "1"]) == 0
+    capsys.readouterr()
+    assert main(["search", "middleware auth", "--name", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "=== project notes ===" not in out
+
+
+def test_note_list_and_unknown_library(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["note", "add", "nope", "--text", "x"]) == 1
+    assert "not found" in capsys.readouterr().err
+    assert main(["note", "remove", "demo", "--id", "99"]) == 1
