@@ -159,6 +159,9 @@ rebuilt automatically.
 
 ## Documentation
 
+- [docs/](docs/index.md) — full documentation: installation, getting
+  started, CLI reference, MCP integration, configuration, indexing and
+  search internals, project notes, version drift warnings
 - [ARCHITECTURE.md](ARCHITECTURE.md) — components, data flows, storage schema
 
 ## Development
