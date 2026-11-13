@@ -45,6 +45,9 @@ virtudoc note add mylib --text "Use the retry helper for all outbound calls."
 # Warn when the indexed docs version diverges from the project dependency
 virtudoc link mylib --project /path/to/consuming/project
 virtudoc doctor   # config, sources, index integrity, version drift summary
+
+# Pull public documentation from a git URL or archive (the only networked command)
+virtudoc fetch --repo https://github.com/org/docs --name theirlib
 ```
 
 ## Connect your agent
@@ -168,9 +171,9 @@ ruff format virtudoc tests
 ## Status
 
 Milestones M1 (core: indexing, chunking, FTS5 search, CLI) and M2 (MCP
-server over stdio/HTTP, project notes) are done. Next: retrieval quality
-(outline mode, pagination polish), version drift warnings (`link`, `doctor`),
-`fetch`, and packaging (PyPI).
+server over stdio/HTTP, project notes, outline mode, `.virtudocignore`) are
+done, plus `link`/`doctor` version drift warnings and the `fetch` command.
+Next: PyPI packaging and the demo screencast.
 
 ## License
 

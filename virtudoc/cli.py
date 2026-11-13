@@ -279,6 +279,35 @@ def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
     return 1 if result.problems else 0
 
 
+def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
+    from .fetcher import FetchError, fetch_source
+
+    try:
+        source = fetch_source(args.repo, args.name)
+    except FetchError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    with _open(cfg) as conn:
+        try:
+            lib_id = add_library(
+                conn,
+                source,
+                args.name,
+                version=args.version,
+                description=args.repo,
+                replace=args.replace,
+            )
+        except (LibraryExistsError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        stats = index_library(conn, lib_id, _chunker_from_config(cfg))
+    print(f"fetched {args.repo} into {source}")
+    print(f"added library {lib_id}")
+    print(stats.summary())
+    _print_skipped(stats.skipped_files)
+    return 0 if stats.errors == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="virtudoc",
@@ -360,6 +389,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check configuration, sources, index integrity")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "fetch",
+        help="download documentation from a URL into the local cache and index it "
+        "(the only command that uses the network)",
+    )
+    p.add_argument("--repo", required=True, help="git URL or archive URL (.zip, .tar.gz)")
+    p.add_argument("--name", required=True, help="library name")
+    p.add_argument("--version", help="documentation version")
+    p.add_argument("--replace", action="store_true", help="replace an existing library")
+    p.set_defaults(func=cmd_fetch)
 
     return parser
 
