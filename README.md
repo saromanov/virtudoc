@@ -38,7 +38,75 @@ virtudoc update --name mylib
 
 # Remove a library
 virtudoc remove mylib
+
+# Attach a team convention note to a library (agents receive it with docs)
+virtudoc note add mylib --text "Use the retry helper for all outbound calls."
 ```
+
+## Connect your agent
+
+Run the MCP server and register it in your agent's config. The server speaks
+stdio by default and reindexes changed sources on every start, so the agent
+always sees the current documentation.
+
+**Claude Code** — add to `.mcp.json` in your project (or run
+`claude mcp add virtudoc --scope user -- virtudoc serve`):
+
+```json
+{
+  "mcpServers": {
+    "virtudoc": {
+      "command": "virtudoc",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**Cursor** — add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "virtudoc": {
+      "command": "virtudoc",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**OpenCode** — add to `opencode.json` (project root or
+`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "virtudoc": {
+      "type": "local",
+      "command": ["virtudoc", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+## MCP tools
+
+The tool names follow the Context7 convention, so existing agent rules that
+reference `resolve-library-id` / `get-library-docs` keep working unchanged.
+
+- `resolve-library-id(libraryName, query)` — find the `local/<name>` id of a
+  library by its name and your question. Call it first.
+- `get-library-docs(libraryId, query, tokens=5000, language, page, mode,
+  section)` — Markdown fragments with heading paths and source file paths,
+  assembled under the token budget. Relevant project notes are included
+  before the fragments. Empty results return the library's top-level
+  sections to help rephrase the query.
+
+Optionally expose the server over streamable HTTP on 127.0.0.1 for clients
+without stdio support: `virtudoc serve --http [port]` (default port 8765).
 
 Supported formats: Markdown (`.md`, `.mdx`), reStructuredText (`.rst`),
 plain text (`.txt`), HTML (`.html`, `.htm`, best-effort text extraction).
@@ -92,8 +160,10 @@ ruff format virtudoc tests
 
 ## Status
 
-Milestone M1 is done (indexing, chunking, FTS5 search, CLI). Next:
-MCP server `serve` (M2), retrieval quality (M3), packaging (M4).
+Milestones M1 (core: indexing, chunking, FTS5 search, CLI) and M2 (MCP
+server over stdio/HTTP, project notes) are done. Next: retrieval quality
+(outline mode, pagination polish), version drift warnings (`link`, `doctor`),
+`fetch`, and packaging (PyPI).
 
 ## License
 
