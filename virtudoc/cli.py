@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import Config, data_dir
 from .db import open_db
+from .doctor import run_doctor
 from .indexer.chunker import Chunker
 from .indexer.indexer import (
     IndexLockError,
@@ -21,6 +22,7 @@ from .indexer.indexer import (
 from .logging_setup import setup_logging
 from .notes import add_note, list_notes, relevant_notes, remove_note
 from .search.engine import library_outline, search
+from .versions import link_library, unlink_library
 
 
 def _chunker_from_config(cfg: Config) -> Chunker:
@@ -237,6 +239,46 @@ def cmd_note_remove(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def cmd_link(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        try:
+            info = link_library(conn, lib["id"], Path(args.project))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    print(f"linked {lib['id']} -> {info.manifest_path} (project version: {info.dep_version})")
+    return 0
+
+
+def cmd_unlink(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        removed = unlink_library(conn, lib["id"])
+    if not removed:
+        print(f"{lib['id']} has no project link")
+        return 0
+    print(f"unlinked {lib['id']}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
+    with _open(cfg) as conn:
+        result = run_doctor(conn, cfg)
+    print("virtudoc doctor")
+    for line in result.lines:
+        print(line)
+    return 1 if result.problems else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="virtudoc",
@@ -306,6 +348,18 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("name", help="library name")
     n.add_argument("--id", type=int, required=True, help="note id")
     n.set_defaults(func=cmd_note_remove)
+
+    p = sub.add_parser("link", help="link a library to a project dependency manifest")
+    p.add_argument("name", help="library name")
+    p.add_argument("--project", required=True, help="path to the consuming project")
+    p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("unlink", help="remove the project link of a library")
+    p.add_argument("name", help="library name")
+    p.set_defaults(func=cmd_unlink)
+
+    p = sub.add_parser("doctor", help="check configuration, sources, index integrity")
+    p.set_defaults(func=cmd_doctor)
 
     return parser
 

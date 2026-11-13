@@ -41,6 +41,10 @@ virtudoc remove mylib
 
 # Attach a team convention note to a library (agents receive it with docs)
 virtudoc note add mylib --text "Use the retry helper for all outbound calls."
+
+# Warn when the indexed docs version diverges from the project dependency
+virtudoc link mylib --project /path/to/consuming/project
+virtudoc doctor   # config, sources, index integrity, version drift summary
 ```
 
 ## Connect your agent

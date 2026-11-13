@@ -15,6 +15,7 @@ from .indexer.indexer import index_library
 from .logging_setup import get_logger
 from .notes import relevant_notes
 from .search.engine import library_outline, resolve_libraries, search, top_level_sections
+from .versions import mismatch_payload
 
 logger = get_logger("mcp")
 
@@ -110,7 +111,7 @@ def build_server(config: Config) -> MCPServer:
             ]
             if mode == "outline":
                 tree = library_outline(conn, libraryId, section=section)
-                return {
+                payload = {
                     "library_id": libraryId,
                     "query": query,
                     "mode": "outline",
@@ -119,6 +120,8 @@ def build_server(config: Config) -> MCPServer:
                     "notes": notes,
                     "total_tokens": sum(node.token_est for node in tree),
                 }
+                warning = mismatch_payload(conn, libraryId)
+                return {"version_mismatch": warning, **payload} if warning else payload
             result = search(
                 conn,
                 query,
@@ -150,7 +153,7 @@ def build_server(config: Config) -> MCPServer:
                         for hint in top_level_sections(conn, libraryId)
                     ],
                 }
-            return {
+            payload = {
                 "library_id": libraryId,
                 "query": query,
                 "page": result.page,
@@ -166,6 +169,8 @@ def build_server(config: Config) -> MCPServer:
                 "notes": notes,
                 "total_tokens": result.total_tokens,
             }
+            warning = mismatch_payload(conn, libraryId)
+            return {"version_mismatch": warning, **payload} if warning else payload
 
     return server
 

@@ -83,3 +83,33 @@ def test_note_list_and_unknown_library(home, docs_dir, capsys):
     assert main(["note", "add", "nope", "--text", "x"]) == 1
     assert "not found" in capsys.readouterr().err
     assert main(["note", "remove", "demo", "--id", "99"]) == 1
+
+
+def test_link_unlink_and_doctor_flow(home, docs_dir, tmp_path, capsys):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==2.0.0\n", encoding="utf-8")
+    assert main(["add", str(docs_dir), "--name", "demo", "--version", "1.0"]) == 0
+    capsys.readouterr()
+    assert main(["link", "demo", "--project", str(project)]) == 0
+    out = capsys.readouterr().out
+    assert "project version: 2.0.0" in out
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "version drift" in out
+    assert main(["unlink", "demo"]) == 0
+    capsys.readouterr()
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "no problems found" in out
+
+
+def test_doctor_reports_missing_source(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    import shutil
+
+    shutil.rmtree(docs_dir)
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "source directory missing" in out
