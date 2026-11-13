@@ -54,7 +54,9 @@ virtudoc fetch --repo https://github.com/org/docs --name theirlib
 
 Run the MCP server and register it in your agent's config. The server speaks
 stdio by default and reindexes changed sources on every start, so the agent
-always sees the current documentation.
+always sees the current documentation. Agents spawn the server with a
+default environment, so the data directory is `~/.virtudoc` — set
+`VIRTUDOC_HOME` in the server `env` block if you need a custom location.
 
 **Claude Code** — add to `.mcp.json` in your project (or run
 `claude mcp add virtudoc --scope user -- virtudoc serve`):
