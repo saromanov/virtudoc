@@ -148,3 +148,13 @@ def test_fetch_duplicate_name_requires_replace(home, tmp_path, capsys):
     capsys.readouterr()
     assert main(["fetch", "--repo", archive.as_uri(), "--name", "dupe"]) == 1
     assert "already exists" in capsys.readouterr().err
+
+
+def test_fetch_cache_conflict_message_names_the_fix(home):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    dest = cache_path("conflict")
+    dest.mkdir(parents=True)
+    (dest / "index.md").write_text("# stale\n", encoding="utf-8")
+    with pytest.raises(FetchError, match=f"rm -rf {dest}"):
+        fetch_source("https://example.com/repo.git", "conflict")

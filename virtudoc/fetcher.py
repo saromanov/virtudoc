@@ -129,7 +129,8 @@ def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
         return
     if dest.exists():
         raise FetchError(
-            f"fetch cache already exists and is not a git clone: {dest}; remove it to fetch again"
+            f"fetch cache already exists and is not a git clone: {dest}; "
+            f"remove it to fetch again: rm -rf {dest}"
         )
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["git", "clone", "--depth", "1"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from typing import Any
 
 import anyio
@@ -8,7 +9,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
-from .config import Config
+from .config import Config, data_dir
 from .db import open_db
 from .indexer.chunker import Chunker
 from .indexer.indexer import index_library
@@ -193,6 +194,10 @@ def reindex_before_serve(config: Config) -> None:
 
 
 def run_serve(config: Config, *, http: bool | int = False) -> int:
+    print(
+        f"virtudoc serve: data directory {data_dir()} (set VIRTUDOC_HOME to override)",
+        file=sys.stderr,
+    )
     reindex_before_serve(config)
     server = build_server(config)
     if http:
