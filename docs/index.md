@@ -43,3 +43,4 @@ internal documentation never leaves your computer.
 - [How search works](search.md)
 - [Project notes](notes.md)
 - [Version drift warnings](versions.md)
+- [Troubleshooting](troubleshooting.md)
