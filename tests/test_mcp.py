@@ -49,13 +49,13 @@ def _payload(result) -> dict:
 
 
 @pytest.mark.anyio
-async def test_mcp_handshake_lists_both_tools(home_index):
+async def test_mcp_handshake_lists_tools(home_index):
     async with stdio_client(_server_params(home_index)) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
-            assert names == {"resolve-library-id", "get-library-docs"}
+            assert names == {"resolve-library-id", "get-library-docs", "query-docs"}
 
 
 @pytest.mark.anyio
@@ -117,6 +117,22 @@ async def test_mcp_get_library_docs_budget(home_index):
             )
             payload = _payload(result)
             assert payload["total_tokens"] <= 220
+
+
+@pytest.mark.anyio
+async def test_mcp_query_docs_alias_matches_get_library_docs(home_index):
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            via_alias = await session.call_tool(
+                "query-docs",
+                {"libraryId": "local/demo", "query": "middleware конвейер"},
+            )
+            assert not _is_error(via_alias)
+            payload = _payload(via_alias)
+            assert payload["library_id"] == "local/demo"
+            assert payload["snippets"], "expected fragments"
+            assert payload["snippets"][0]["source"] == "guide.md"
 
 
 @pytest.mark.anyio

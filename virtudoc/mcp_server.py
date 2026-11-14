@@ -39,6 +39,11 @@ GET_DOCS_DESCRIPTION = (
     "restrict the output to one branch (e.g. 'API -> Middleware')."
 )
 
+QUERY_DOCS_ALIAS_DESCRIPTION = (
+    "Alias of 'get-library-docs' registered under the Context7 tool name, so "
+    "agent rules written for Context7 keep working. Prefer 'get-library-docs'."
+)
+
 
 def build_server(config: Config) -> MCPServer:
     server = MCPServer(
@@ -80,6 +85,7 @@ def build_server(config: Config) -> MCPServer:
         }
 
     @server.tool(name="get-library-docs", description=GET_DOCS_DESCRIPTION)
+    @server.tool(name="query-docs", description=QUERY_DOCS_ALIAS_DESCRIPTION)
     def get_library_docs(
         libraryId: str,
         query: str,
