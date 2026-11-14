@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +24,39 @@ class CheckResult:
 
     def info(self, line: str) -> None:
         self.lines.append(f"       {line}")
+
+
+def _warn_unstable_source(result: CheckResult, lib_id: str, source: Path) -> None:
+    """Flag git checkouts whose content can flap between indexing runs."""
+    if shutil.which("git") is None or not (source / ".git").exists():
+        return
+
+    def git(*args: str) -> str | None:
+        proc = subprocess.run(
+            ["git", "-C", str(source), *args],
+            capture_output=True,
+            text=True,
+        )
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
+    branch = git("symbolic-ref", "--short", "-q", "HEAD")
+    if branch is None:
+        if git("rev-parse", "--is-inside-work-tree") == "true":
+            result.warn(f"{lib_id}: source is a git checkout in detached HEAD state")
+        return
+    default = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
+    if default:
+        default_name = default.removeprefix("origin/")
+        if branch != default_name:
+            result.warn(
+                f"{lib_id}: source on branch '{branch}' (default '{default_name}') — "
+                f"the index follows this checkout; "
+                f"'virtudoc fetch --branch {default_name}' gives a stable team baseline"
+            )
+    if git("status", "--porcelain"):
+        result.warn(
+            f"{lib_id}: source has uncommitted changes — indexed docs may include work in progress"
+        )
 
 
 def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
@@ -60,6 +95,7 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 f"{lib['chunk_count']} chunks, {lib['note_count']} notes, "
                 f"docs version: {lib['version'] or 'unknown'}"
             )
+            _warn_unstable_source(result, lib["id"], source)
         else:
             result.warn(f"{lib['id']}: source directory missing: {source}")
 

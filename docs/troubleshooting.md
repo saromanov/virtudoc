@@ -95,6 +95,17 @@ sections — or inspect the tree upfront with
 fresh automatically. For a session that is already running, execute
 `virtudoc update` — the next tool call sees the new data.
 
+## The indexed docs keep changing / differ between machines
+
+**Cause:** the library's source is someone's git working tree: the index
+follows whatever branch and uncommitted state are checked out there.
+
+**Fix:** run `virtudoc doctor` — it warns about sources on a non-default
+branch or with uncommitted changes. For a team baseline, index a pinned
+clone of the default branch instead:
+`virtudoc fetch --repo <url> --branch main --name <name>`; see the
+`fetch` section in the [CLI reference](cli.md).
+
 ## Installation fails with a Python version error
 
 VirtuDoc needs Python 3.11+ (`requires-python = ">=3.11"`). Check with

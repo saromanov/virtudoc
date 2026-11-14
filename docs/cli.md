@@ -86,8 +86,10 @@ virtudoc doctor
 
 Checks the data directory, schema version, every library's source path,
 link drift (re-evaluated live) and index integrity (orphan chunks/FTS
-rows). Prints a report and exits with code `1` when problems are found —
-usable in CI.
+rows). For git checkout sources it also warns when the checkout is on a
+non-default branch or has uncommitted changes — the indexed docs then
+depend on someone's work in progress. Prints a report and exits with code
+`1` when problems are found — usable in CI.
 
 ## remove — delete a library
 
