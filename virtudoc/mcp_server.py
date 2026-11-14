@@ -39,18 +39,13 @@ GET_DOCS_DESCRIPTION = (
     "restrict the output to one branch (e.g. 'API -> Middleware')."
 )
 
-QUERY_DOCS_ALIAS_DESCRIPTION = (
-    "Alias of 'get-library-docs' registered under the Context7 tool name, so "
-    "agent rules written for Context7 keep working. Prefer 'get-library-docs'."
-)
-
 
 def build_server(config: Config) -> MCPServer:
     server = MCPServer(
         name="virtudoc",
         version=__version__,
         instructions=(
-            "Local documentation provider. Workflow: 1) resolve-library-id to "
+            "Local documentation provider. Workflow: 1) find-library to "
             "find the library id, 2) get-library-docs with a keyword query. "
             "Everything runs offline on the user's machine."
         ),
@@ -59,8 +54,8 @@ def build_server(config: Config) -> MCPServer:
     def connect() -> sqlite3.Connection:
         return open_db(config.db_path)
 
-    @server.tool(name="resolve-library-id", description=RESOLVE_DESCRIPTION)
-    def resolve_library_id(libraryName: str, query: str) -> dict[str, Any]:
+    @server.tool(name="find-library", description=RESOLVE_DESCRIPTION)
+    def find_library(libraryName: str, query: str) -> dict[str, Any]:
         with connect() as conn:
             matches = resolve_libraries(conn, libraryName, query)
         if not matches:
@@ -85,7 +80,6 @@ def build_server(config: Config) -> MCPServer:
         }
 
     @server.tool(name="get-library-docs", description=GET_DOCS_DESCRIPTION)
-    @server.tool(name="query-docs", description=QUERY_DOCS_ALIAS_DESCRIPTION)
     def get_library_docs(
         libraryId: str,
         query: str,
@@ -104,7 +98,7 @@ def build_server(config: Config) -> MCPServer:
             if lib is None:
                 raise ToolError(
                     f"library not found: {libraryId!r}; "
-                    "call resolve-library-id to list available libraries"
+                    "call find-library to list available libraries"
                 )
             notes = [
                 {"id": note.id, "text": note.text, "created_at": note.created_at}

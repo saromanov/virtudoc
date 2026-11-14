@@ -55,16 +55,16 @@ async def test_mcp_handshake_lists_tools(home_index):
             await session.initialize()
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
-            assert names == {"resolve-library-id", "get-library-docs", "query-docs"}
+            assert names == {"find-library", "get-library-docs"}
 
 
 @pytest.mark.anyio
-async def test_mcp_resolve_library_id(home_index):
+async def test_mcp_find_library(home_index):
     async with stdio_client(_server_params(home_index)) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(
-                "resolve-library-id",
+                "find-library",
                 {"libraryName": "demo", "query": "middleware обработка"},
             )
             assert not _is_error(result)
@@ -79,7 +79,7 @@ async def test_mcp_resolve_unknown_library_returns_hint(home_index):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(
-                "resolve-library-id", {"libraryName": "nonexistent", "query": "x"}
+                "find-library", {"libraryName": "nonexistent", "query": "x"}
             )
             payload = _payload(result)
             assert payload["libraries"] == []
@@ -117,22 +117,6 @@ async def test_mcp_get_library_docs_budget(home_index):
             )
             payload = _payload(result)
             assert payload["total_tokens"] <= 220
-
-
-@pytest.mark.anyio
-async def test_mcp_query_docs_alias_matches_get_library_docs(home_index):
-    async with stdio_client(_server_params(home_index)) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            via_alias = await session.call_tool(
-                "query-docs",
-                {"libraryId": "local/demo", "query": "middleware конвейер"},
-            )
-            assert not _is_error(via_alias)
-            payload = _payload(via_alias)
-            assert payload["library_id"] == "local/demo"
-            assert payload["snippets"], "expected fragments"
-            assert payload["snippets"][0]["source"] == "guide.md"
 
 
 @pytest.mark.anyio
