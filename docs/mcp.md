@@ -5,6 +5,12 @@ use it: Claude Code, Cursor, OpenCode, VS Code and others.
 
 ## Connecting
 
+Agents spawn the server with their own environment, where `virtudoc` may
+not be on `PATH` (typical for pipx/venv installs). If the tools never
+appear in the agent, use the absolute path as `command` — find it with
+`which virtudoc` — or add the server's `bin` directory to the MCP config's
+`env.PATH`.
+
 **Claude Code** — `.mcp.json` in the project root, or:
 
 ```bash
