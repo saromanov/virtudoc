@@ -46,6 +46,20 @@ claude mcp add virtudoc --scope user -- virtudoc serve
 Agents spawn the server with a default environment, so the data directory
 is `~/.virtudoc`. Add an `env` block with `VIRTUDOC_HOME` to override.
 
+## CLI + skill mode (no MCP setup)
+
+If the agent can run shell commands, skip the MCP configuration entirely.
+Install the bundled skill and let the agent drive the CLI:
+
+```bash
+cp -r skills/virtudoc-docs ~/.kimi-code/skills/     # Kimi Code, user-wide
+# or project-wide: .kimi-code/skills/ (Kimi Code), .agents/skills/ (generic)
+```
+
+The skill teaches the `virtudoc list` → `virtudoc search --name ...`
+workflow. For agents without a skill mechanism, add the CLI variant of the
+rule below to the project's `AGENTS.md` / `CLAUDE.md` instead.
+
 ## Tools
 
 Tool names follow the [Context7](https://github.com/upstash/context7)
@@ -134,3 +148,9 @@ systematic:
 > and fetch current docs with `get-library-docs` before writing code. Use
 > keyword queries; check `version_mismatch` and project notes in the
 > response.
+
+CLI-only variant (no MCP server configured):
+
+> When a question concerns `<library>`, check `virtudoc list` and answer
+> from `virtudoc search --name <library> "<keywords>"` before relying on
+> training data.

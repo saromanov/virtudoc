@@ -36,7 +36,8 @@ internal documentation never leaves your computer.
 - [Installation](installation.md)
 - [Getting started](getting-started.md)
 - [CLI reference](cli.md)
-- [MCP integration and tools](mcp.md)
+- [MCP integration and tools](mcp.md) (including the bundled
+  `skills/virtudoc-docs` agent skill)
 - [Configuration](configuration.md)
 - [Indexing and chunking](indexing.md)
 - [How search works](search.md)
