@@ -107,10 +107,7 @@ default environment, so the data directory is `~/.virtudoc` — set
 
 ## MCP tools
 
-The tool names follow the Context7 convention, so existing agent rules that
-reference `resolve-library-id` / `get-library-docs` keep working unchanged.
-
-- `resolve-library-id(libraryName, query)` — find the `local/<name>` id of a
+- `find-library(libraryName, query)` — find the `local/<name>` id of a
   library by its name and your question. Call it first.
 - `get-library-docs(libraryId, query, tokens=5000, language, page, mode,
   section)` — Markdown fragments with heading paths and source file paths,

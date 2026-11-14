@@ -30,7 +30,7 @@ virtudoc/
 │   └── indexer.py    # Orchestration: hash → skip/reindex, locking
 ├── search/
 │   └── engine.py     # FTS5/BM25, query cascade, boosts, budget assembly
-└── (M2) mcp_server.py  # resolve-library-id and get-library-docs tools, stdio
+└── (M2) mcp_server.py  # find-library and get-library-docs tools, stdio
 ```
 
 ## Data flows
@@ -130,7 +130,7 @@ database schema is versioned.
 ## Roadmap
 
 - **M1 (done):** core — indexing, chunking, FTS5 search, CLI.
-- **M2:** MCP server `serve` (stdio), `resolve-library-id` /
+- **M2:** MCP server `serve` (stdio), `find-library` /
   `get-library-docs` tools, reindex-on-start, Claude Code/Cursor integration.
 - **M3:** retrieval quality — adjacent-chunk merging, pagination, code-share
   control, notes block, version-mismatch warnings, outline mode, a control

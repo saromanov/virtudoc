@@ -62,17 +62,14 @@ rule below to the project's `AGENTS.md` / `CLAUDE.md` instead.
 
 ## Tools
 
-Tool names follow the [Context7](https://github.com/upstash/context7)
-convention, so existing agent rules that mention `resolve-library-id` /
-`query-docs` keep working unchanged: `query-docs` is registered as an
-alias of `get-library-docs` (same parameters and output). Prefer
-`get-library-docs` in new rules — the alias exists only for
-compatibility.
+The tool names are unique to virtudoc: they do not collide with
+[Context7](https://github.com/upstash/context7) tools, so an agent
+connected to both servers can always tell which one to call.
 
-### resolve-library-id
+### find-library
 
 ```
-resolve-library-id(libraryName: string, query: string)
+find-library(libraryName: string, query: string)
 ```
 
 Finds the library for a question. Returns up to five candidates:
@@ -98,7 +95,7 @@ register a source with `virtudoc add`.
 
 ```
 get-library-docs(
-  libraryId: string,      // from resolve-library-id, e.g. "local/mylib"
+  libraryId: string,      // from find-library, e.g. "local/mylib"
   query: string,          // keyword query
   tokens: int = 5000,     // output budget, max 20000
   language: string,       // preferred code-example language (optional)
@@ -144,7 +141,7 @@ before spending tokens. `section` works in both modes.
 Add a line to your project's `AGENTS.md` / `CLAUDE.md` to make usage
 systematic:
 
-> When working with `<library>`, resolve its id with `resolve-library-id`
+> When working with `<library>`, resolve its id with `find-library`
 > and fetch current docs with `get-library-docs` before writing code. Use
 > keyword queries; check `version_mismatch` and project notes in the
 > response.

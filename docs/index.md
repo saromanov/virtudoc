@@ -28,7 +28,7 @@ internal documentation never leaves your computer.
    (`virtudoc add`). Files are parsed, split into chunks along headings and
    stored in a local SQLite database.
 2. You register the MCP server in your agent's config once.
-3. The agent calls `resolve-library-id` to find a library, then
+3. The agent calls `find-library` to find a library, then
    `get-library-docs` to fetch fragments, notes and section trees.
 
 ## Where to go next
