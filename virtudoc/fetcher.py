@@ -22,10 +22,12 @@ def cache_path(name: str) -> Path:
     return data_dir() / "fetch" / name
 
 
-def fetch_source(repo_url: str, name: str) -> Path:
+def fetch_source(repo_url: str, name: str, branch: str | None = None) -> Path:
     """Download or clone repo_url into the local fetch cache and return the path.
 
     This is the only command allowed to touch the network (NFR-01).
+    For git URLs, branch selects a non-default branch; archive URLs encode
+    the branch in the URL already.
     """
     dest = cache_path(name)
     lower = repo_url.lower().split("?", 1)[0]
@@ -34,7 +36,7 @@ def fetch_source(repo_url: str, name: str) -> Path:
     elif lower.endswith((".tar.gz", ".tgz", ".tar")):
         _fetch_archive(repo_url, dest, kind="tar")
     else:
-        _fetch_git(repo_url, dest)
+        _fetch_git(repo_url, dest, branch)
     return dest
 
 
@@ -97,10 +99,26 @@ def _single_root(extracted: Path) -> Path:
     return extracted
 
 
-def _fetch_git(url: str, dest: Path) -> None:
+def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
     if shutil.which("git") is None:
         raise FetchError("git is not installed; cannot clone repositories")
     if (dest / ".git").is_dir():
+        if branch:
+            result = subprocess.run(
+                ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", branch],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise FetchError(f"git fetch of branch '{branch}' failed: {result.stderr.strip()}")
+            result = subprocess.run(
+                ["git", "-C", str(dest), "checkout", "-q", "-B", branch, "FETCH_HEAD"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise FetchError(f"git checkout {branch} failed: {result.stderr.strip()}")
+            return
         result = subprocess.run(
             ["git", "-C", str(dest), "pull", "--ff-only"],
             capture_output=True,
@@ -114,11 +132,11 @@ def _fetch_git(url: str, dest: Path) -> None:
             f"fetch cache already exists and is not a git clone: {dest}; remove it to fetch again"
         )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", url, str(dest)],
-        capture_output=True,
-        text=True,
-    )
+    cmd = ["git", "clone", "--depth", "1"]
+    if branch:
+        cmd += ["--branch", branch]
+    cmd += [url, str(dest)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         shutil.rmtree(dest, ignore_errors=True)
         raise FetchError(f"git clone failed: {result.stderr.strip()}")

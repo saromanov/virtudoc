@@ -109,6 +109,7 @@ of output (FR-18). The schema version is recorded in `meta` and
 | Key | Default | Purpose |
 |---|---|---|
 | `db.path` | `~/.virtudoc/index.db` | Database location |
+| `fetch.branch` | unset | Git branch for `fetch` (unset = repo default) |
 | `chunk.target_tokens` / `max_tokens` / `overlap_tokens` | 600 / 1200 / 60 | Chunker budgets |
 | `search.default_tokens` / `max_results` | 5000 / 20 | Output budget and limit |
 | `notes.max_tokens` | 800 | Notes block budget (M3) |

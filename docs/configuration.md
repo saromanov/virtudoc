@@ -9,6 +9,9 @@ program.
 [db]
 path = "~/.virtudoc/index.db"      # database location
 
+[fetch]
+branch = "main"                    # git branch for `fetch` (unset = repo default)
+
 [chunk]
 target_tokens = 600                # target chunk size
 max_tokens = 1200                  # hard limit for a chunk

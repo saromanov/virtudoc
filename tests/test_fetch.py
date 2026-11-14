@@ -78,6 +78,63 @@ def test_fetch_git_local_clone(home, tmp_path):
     assert main(["fetch", "--repo", str(repo), "--name", "gitlib", "--replace"]) == 0
 
 
+def _git_repo_with_branches(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=repo, check=True)
+    (repo / "index.md").write_text("# Main docs\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "main"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "-qb", "release"], cwd=repo, check=True)
+    (repo / "index.md").write_text("# Release docs\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "release"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    return repo
+
+
+def test_fetch_git_branch_flag(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    assert main(["fetch", "--repo", str(repo), "--name", "branchlib"]) == 0
+    assert "# Main docs" in (cache_path("branchlib") / "index.md").read_text(encoding="utf-8")
+    # explicit --branch overrides the repo default, on clone and on re-fetch
+    args = ["fetch", "--repo", str(repo), "--name", "branchlib", "--branch", "release"]
+    assert main(args) == 1  # cache holds main, library exists: --replace required
+    assert main([*args, "--replace"]) == 0
+    assert "# Release docs" in (cache_path("branchlib") / "index.md").read_text(encoding="utf-8")
+    assert main([*args, "--replace"]) == 0
+    assert "# Release docs" in (cache_path("branchlib") / "index.md").read_text(encoding="utf-8")
+
+
+def test_fetch_git_branch_from_config(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    home.mkdir(exist_ok=True)
+    (home / "config.toml").write_text('[fetch]\nbranch = "release"\n', encoding="utf-8")
+    assert main(["fetch", "--repo", str(repo), "--name", "cfglib"]) == 0
+    assert "# Release docs" in (cache_path("cfglib") / "index.md").read_text(encoding="utf-8")
+
+
+def test_fetch_git_unknown_branch_fails(home, tmp_path, capsys):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    assert main(["fetch", "--repo", str(repo), "--name", "badbranch", "--branch", "nope"]) == 1
+    assert "git clone failed" in capsys.readouterr().err
+
+
 def test_fetch_git_failure_is_clean_error(home, tmp_path, capsys):
     if shutil.which("git") is None:
         pytest.skip("git not available")

@@ -28,13 +28,15 @@ removed / errors.
 ## fetch — download remote documentation
 
 ```bash
-virtudoc fetch --repo <url> --name <name> [--version V] [--replace]
+virtudoc fetch --repo <url> --name <name> [--version V] [--branch B] [--replace]
 ```
 
 The only command that uses the network. Git URLs are cloned with
 `--depth 1` into `~/.virtudoc/fetch/<name>` (a repeated fetch pulls with
 `--ff-only`); archive URLs (`.zip`, `.tar.gz`, `.tgz`, `.tar`) are
-downloaded and extracted with path-traversal protection.
+downloaded and extracted with path-traversal protection. Use `--branch`
+(or the config key `fetch.branch`) to pin a git branch other than the
+repo default; the flag overrides the config key.
 
 ## list — index statistics
 

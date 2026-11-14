@@ -282,8 +282,10 @@ def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
 def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     from .fetcher import FetchError, fetch_source
 
+    configured_branch = cfg.values.get("fetch.branch")
+    branch = args.branch or (str(configured_branch) if configured_branch else None)
     try:
-        source = fetch_source(args.repo, args.name)
+        source = fetch_source(args.repo, args.name, branch=branch)
     except FetchError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -467,6 +469,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", required=True, help="git URL or archive URL (.zip, .tar.gz)")
     p.add_argument("--name", required=True, help="library name")
     p.add_argument("--version", help="documentation version")
+    p.add_argument(
+        "--branch",
+        help="git branch to fetch (default: config fetch.branch, else the repo default branch)",
+    )
     p.add_argument("--replace", action="store_true", help="replace an existing library")
     p.set_defaults(func=cmd_fetch)
 
