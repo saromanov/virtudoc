@@ -48,8 +48,12 @@ is `~/.virtudoc`. Add an `env` block with `VIRTUDOC_HOME` to override.
 
 ## Tools
 
-Tool names follow the Context7 convention, so existing agent rules that
-mention `resolve-library-id` / `get-library-docs` keep working unchanged.
+Tool names follow the [Context7](https://github.com/upstash/context7)
+convention, so existing agent rules that mention `resolve-library-id` /
+`query-docs` keep working unchanged: `query-docs` is registered as an
+alias of `get-library-docs` (same parameters and output). Prefer
+`get-library-docs` in new rules — the alias exists only for
+compatibility.
 
 ### resolve-library-id
 
