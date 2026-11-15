@@ -36,6 +36,9 @@ virtudoc search "how to handle authentication errors"
 virtudoc update              # all libraries
 virtudoc update --name mylib
 
+# Full rebuild of one library (applies changed chunk.* settings)
+virtudoc reindex mylib
+
 # Remove a library
 virtudoc remove mylib
 

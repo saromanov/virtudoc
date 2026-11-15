@@ -223,6 +223,29 @@ def index_library(
     return stats
 
 
+def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
+    """Drop every indexed document of a library, keeping registration and notes."""
+    conn.execute(
+        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
+        (lib_id,),
+    )
+    conn.execute("DELETE FROM documents WHERE library_id = ?", (lib_id,))
+    conn.commit()
+
+
+def reindex_library(
+    conn: sqlite3.Connection,
+    lib_id: str,
+    chunker: Chunker,
+) -> IndexStats:
+    """Full rebuild: re-chunk every document, applying current chunk.* settings."""
+    row = conn.execute("SELECT id FROM libraries WHERE id = ?", (lib_id,)).fetchone()
+    if row is None:
+        raise LibraryNotFoundError(f"library not found: {lib_id}")
+    clear_library_index(conn, lib_id)
+    return index_library(conn, lib_id, chunker)
+
+
 def update_all(conn: sqlite3.Connection, chunker: Chunker) -> dict[str, IndexStats]:
     results: dict[str, IndexStats] = {}
     rows = conn.execute("SELECT id FROM libraries ORDER BY id").fetchall()

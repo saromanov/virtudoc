@@ -61,7 +61,8 @@ indexing.
 **Cause:** chunk settings apply at indexing time; the existing index is
 not rebuilt automatically (the CLI prints a note on `update`).
 
-**Fix:** `virtudoc remove <name> --yes && virtudoc add <path> --name <name>`.
+**Fix:** `virtudoc reindex <name>` — a full rebuild that re-chunks every
+document with the current settings.
 
 ## `update` fails with `IndexLockError`
 
