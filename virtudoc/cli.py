@@ -175,6 +175,7 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             token_budget=args.tokens or cfg.get_int("search.default_tokens"),
             max_results=cfg.get_int("search.max_results"),
             section=args.section,
+            window_tokens=cfg.get_int("search.snippet_window_tokens"),
         )
         notes = []
         if library_id:

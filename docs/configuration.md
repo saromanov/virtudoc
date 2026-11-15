@@ -23,6 +23,7 @@ auto_refresh = true                # reindex a library when the source is newer
 [search]
 default_tokens = 5000              # output budget for search/get-library-docs
 max_results = 20                   # max fragments per response
+snippet_window_tokens = 400        # trim long chunks around query hits (0 = full chunks)
 
 [notes]
 max_tokens = 800                   # budget for the project notes block
