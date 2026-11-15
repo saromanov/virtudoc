@@ -17,6 +17,7 @@ from .indexer.indexer import (
     get_library,
     index_library,
     list_libraries,
+    reindex_library,
     update_all,
 )
 from .logging_setup import setup_logging
@@ -90,10 +91,24 @@ def cmd_update(args: argparse.Namespace, cfg: Config) -> int:
     ]
     if chunk_keys:
         print(
-            "note: changed chunk.* settings only affect new indexing; to rebuild "
-            "the index, remove the library and add it again"
+            "note: changed chunk.* settings only affect new indexing; "
+            f"rebuild the index with: virtudoc reindex {args.name or '<name>'}"
         )
     return 0
+
+
+def cmd_reindex(args: argparse.Namespace, cfg: Config) -> int:
+    chunker = _chunker_from_config(cfg)
+    with _open(cfg) as conn:
+        try:
+            lib = get_library(conn, args.name)
+            stats = reindex_library(conn, lib["id"], chunker)
+        except (LibraryNotFoundError, IndexLockError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    print(f"{lib['id']}: {stats.summary()}")
+    _print_skipped(stats.skipped_files)
+    return 0 if stats.errors == 0 else 1
 
 
 def cmd_list(args: argparse.Namespace, cfg: Config) -> int:
@@ -397,6 +412,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("update", help="incremental reindexing")
     p.add_argument("--name", help="library name (omitted — all libraries)")
     p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser(
+        "reindex",
+        help="full rebuild of one library, applying the current chunk.* settings",
+    )
+    p.add_argument("name", help="library name")
+    p.set_defaults(func=cmd_reindex)
 
     p = sub.add_parser("list", help="list libraries with index statistics")
     p.set_defaults(func=cmd_list)

@@ -25,6 +25,18 @@ change are skipped; changed files are re-chunked; deleted files are removed
 from the index. Summary per library: processed / reindexed / skipped /
 removed / errors.
 
+## reindex — full rebuild of one library
+
+```bash
+virtudoc reindex <name>
+```
+
+Drops every indexed document of the library and re-chunks the whole source
+from scratch with the current `chunk.*` settings. Use it after changing
+`chunk.target_tokens` / `chunk.max_tokens` / `chunk.overlap_tokens` in the
+config — incremental `update` only re-chunks changed files. Notes and the
+library registration survive a rebuild.
+
 ## fetch — download remote documentation
 
 ```bash

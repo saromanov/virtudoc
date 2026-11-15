@@ -71,6 +71,30 @@ def test_update_command(home, docs_dir, capsys):
     assert "skipped: 3" in out
 
 
+def test_reindex_full_rebuild(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    (home / "config.toml").write_text(
+        "[chunk]\ntarget_tokens = 40\nmax_tokens = 80\n", encoding="utf-8"
+    )
+    assert main(["reindex", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "local/demo" in out
+    assert "reindexed: 3" in out
+
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+
+    with open_db(Config().db_path) as conn:
+        rows = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert rows > 3  # smaller chunks -> more chunks than before
+
+
+def test_reindex_unknown_library(home, capsys):
+    assert main(["reindex", "nope"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
 def test_search_unknown_library(home, capsys):
     assert main(["search", "x", "--name", "nope"]) == 1
     assert "not found" in capsys.readouterr().err
