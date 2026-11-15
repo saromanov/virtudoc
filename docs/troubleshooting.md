@@ -13,7 +13,8 @@ with `VIRTUDOC_HOME` pointing elsewhere.
 **Fix:** check which directory the server actually uses: `virtudoc serve`
 prints it to stderr on startup (`virtudoc serve: data directory ...`), and
 MCP clients keep server stderr in their logs. Then either unset
-`VIRTUDOC_HOME` in your shell or add it to the server's config:
+`VIRTUDOC_HOME` in your shell or add it to the server's config
+(`virtudoc mcp-config` prints the snippet with the `env` block included):
 
 ```json
 { "mcpServers": { "virtudoc": {
@@ -27,9 +28,11 @@ MCP clients keep server stderr in their logs. Then either unset
 **Cause:** the agent cannot find the `virtudoc` binary — pipx/venv
 installs often leave it off the `PATH` that MCP clients construct.
 
-**Fix:** find the binary (`which virtudoc` in the environment where
-installing worked) and use its absolute path as `command` in the MCP
-config, or extend `env.PATH` there. See [MCP integration](mcp.md).
+**Fix:** run `virtudoc mcp-config` — it prints a ready config snippet with
+the absolute server path and the active data directory. Or find the binary
+(`which virtudoc` in the environment where installing worked) and use its
+absolute path as `command` in the MCP config, or extend `env.PATH` there.
+See [MCP integration](mcp.md).
 
 ## `fetch`: "fetch cache already exists and is not a git clone"
 

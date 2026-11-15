@@ -108,6 +108,29 @@ def test_serve_help(home, capsys):
     assert "--http" in out
 
 
+def _parse_mcp_config(capsys) -> dict:
+    import json
+
+    assert main(["mcp-config"]) == 0
+    captured = capsys.readouterr()
+    return json.loads(captured.out)
+
+
+def test_mcp_config_prints_ready_snippet(home, capsys):
+    config = _parse_mcp_config(capsys)
+    entry = config["mcpServers"]["virtudoc"]
+    assert entry["args"] == ["serve"]
+    assert entry["command"]  # absolute path or "<python> -m virtudoc"
+    assert entry["env"]["VIRTUDOC_HOME"] == str(home)
+
+
+def test_mcp_config_without_data_dir_override(home, capsys, monkeypatch):
+    monkeypatch.delenv("VIRTUDOC_HOME", raising=False)
+    config = _parse_mcp_config(capsys)
+    entry = config["mcpServers"]["virtudoc"]
+    assert "env" not in entry
+
+
 def test_remove_requires_confirmation(home, docs_dir, capsys, monkeypatch):
     main(["add", str(docs_dir), "--name", "demo"])
     capsys.readouterr()

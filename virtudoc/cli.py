@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
 from pathlib import Path
 
-from .config import Config, data_dir
+from .config import DATA_DIR_ENV, Config, data_dir
 from .db import open_db
 from .doctor import run_doctor
 from .indexer.chunker import Chunker
@@ -285,6 +287,35 @@ def cmd_unlink(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def _server_command() -> str:
+    """Absolute path of the virtudoc binary as an MCP client will see it."""
+    argv0 = Path(sys.argv[0]).resolve() if sys.argv[0] else None
+    if argv0 and argv0.name == "virtudoc" and argv0.is_file():
+        return str(argv0)
+    resolved = shutil.which("virtudoc")
+    if resolved:
+        return str(Path(resolved).resolve())
+    return f"{sys.executable} -m virtudoc"
+
+
+def cmd_mcp_config(args: argparse.Namespace, cfg: Config) -> int:
+    import json
+
+    server_entry: dict[str, object] = {
+        "command": _server_command(),
+        "args": ["serve"],
+    }
+    env = {"VIRTUDOC_HOME": str(data_dir())} if os.environ.get(DATA_DIR_ENV) else {}
+    if env:
+        server_entry["env"] = env
+    print(
+        "Paste into the MCP client config (Claude Code, Cursor, etc.):",
+        file=sys.stderr,
+    )
+    print(json.dumps({"mcpServers": {"virtudoc": server_entry}}, indent=2))
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
     with _open(cfg) as conn:
         result = run_doctor(conn, cfg)
@@ -482,6 +513,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check configuration, sources, index integrity")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "mcp-config",
+        help="print a ready MCP client config snippet with the absolute server path",
+    )
+    p.set_defaults(func=cmd_mcp_config)
 
     p = sub.add_parser(
         "fetch",

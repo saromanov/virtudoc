@@ -89,7 +89,6 @@ virtudoc unlink <name>
 
 Reads the dependency manifest of the consuming project and records the
 expected version. See [Version drift warnings](versions.md).
-
 ## doctor — diagnostics
 
 ```bash
@@ -102,6 +101,18 @@ rows). For git checkout sources it also warns when the checkout is on a
 non-default branch or has uncommitted changes — the indexed docs then
 depend on someone's work in progress. Prints a report and exits with code
 `1` when problems are found — usable in CI.
+
+## mcp-config — ready MCP client snippet
+
+```bash
+virtudoc mcp-config
+```
+
+Prints a ready `mcpServers` block for Claude Code / Cursor / OpenCode
+configs: absolute path of the `virtudoc` binary as the `command` and,
+when `VIRTUDOC_HOME` is set, an `env` block pinning the data directory.
+Solves the two most common integration problems: the agent cannot find
+the binary and the agent using a different data directory.
 
 ## remove — delete a library
 
