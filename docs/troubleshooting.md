@@ -108,11 +108,12 @@ section), and run `virtudoc update` to force an immediate refresh.
 **Cause:** the library's source is someone's git working tree: the index
 follows whatever branch and uncommitted state are checked out there.
 
-**Fix:** run `virtudoc doctor` — it warns about sources on a non-default
-branch or with uncommitted changes. For a team baseline, index a pinned
-clone of the default branch instead:
-`virtudoc fetch --repo <url> --branch main --name <name>`; see the
-`fetch` section in the [CLI reference](cli.md).
+**Fix:** index a pinned clone of the branch you want:
+`virtudoc fetch --repo <url> --branch main --name <name>`. The branch is
+recorded in a sidecar file, every `serve` start resets the clone to it
+(offline), and `virtudoc doctor` warns when the checkout has drifted.
+Run `virtudoc doctor` for any other unstable-source warnings (working
+tree sources on a non-default branch or with uncommitted changes).
 
 ## Installation fails with a Python version error
 

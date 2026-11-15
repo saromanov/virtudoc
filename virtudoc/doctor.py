@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config, data_dir
+from .fetcher import read_pinned_branch
 from .versions import extract_dep_version, version_status
 
 
@@ -40,12 +41,18 @@ def _warn_unstable_source(result: CheckResult, lib_id: str, source: Path) -> Non
         return proc.stdout.strip() if proc.returncode == 0 else None
 
     branch = git("symbolic-ref", "--short", "-q", "HEAD")
+    pinned = read_pinned_branch(source)
     if branch is None:
         if git("rev-parse", "--is-inside-work-tree") == "true":
             result.warn(f"{lib_id}: source is a git checkout in detached HEAD state")
         return
+    if pinned and branch != pinned:
+        result.warn(
+            f"{lib_id}: fetch cache pinned to branch '{pinned}' but the checkout "
+            f"is on '{branch}' — serve resets it locally before reindexing"
+        )
     default = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
-    if default:
+    if default and not (pinned and branch == pinned):
         default_name = default.removeprefix("origin/")
         if branch != default_name:
             result.warn(

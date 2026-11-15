@@ -185,6 +185,90 @@ def test_fetch_git_failure_is_clean_error(home, tmp_path, capsys):
     assert "git clone failed" in capsys.readouterr().err
 
 
+def test_fetch_records_pinned_branch(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    assert main(["fetch", "--repo", str(repo), "--name", "pinlib", "--branch", "release"]) == 0
+    from virtudoc.fetcher import read_pinned_branch
+
+    assert read_pinned_branch(cache_path("pinlib")) == "release"
+
+
+def test_ensure_pinned_checkout_resets_drifted_clone(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    fetch_source(str(repo), "driftlib", branch="release")
+    dest = cache_path("driftlib")
+    subprocess.run(["git", "-C", str(dest), "checkout", "-q", "--detach", "HEAD"], check=True)
+    head = subprocess.run(
+        ["git", "-C", str(dest), "symbolic-ref", "--short", "-q", "HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head == ""  # detached: no branch ref
+
+    from virtudoc.fetcher import ensure_pinned_checkout
+
+    assert ensure_pinned_checkout(dest) == "release"
+    head = subprocess.run(
+        ["git", "-C", str(dest), "symbolic-ref", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert head == "release"
+
+
+def test_ensure_pinned_checkout_leaves_dirty_tree(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    fetch_source(str(repo), "dirtylib", branch="release")
+    dest = cache_path("dirtylib")
+    subprocess.run(["git", "-C", str(dest), "checkout", "-q", "--detach", "HEAD"], check=True)
+    (dest / "work.md").write_text("# Work in progress\n", encoding="utf-8")
+
+    from virtudoc.fetcher import ensure_pinned_checkout
+
+    assert ensure_pinned_checkout(dest) == "release"
+    head = subprocess.run(
+        ["git", "-C", str(dest), "symbolic-ref", "--short", "-q", "HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head == ""  # dirty detached tree is never reset
+    assert (dest / "work.md").exists()
+
+
+def test_reindex_before_serve_resets_to_pinned_branch(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    import virtudoc.mcp_server as mcp_server_module
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+    from virtudoc.indexer.indexer import add_library
+
+    repo = _git_repo_with_branches(tmp_path)
+    fetch_source(str(repo), "servelib", branch="release")
+    subprocess.run(
+        ["git", "-C", cache_path("servelib"), "checkout", "-q", "--detach", "HEAD"], check=True
+    )
+    with open_db(Config().db_path) as conn:
+        add_library(conn, cache_path("servelib"), "servelib")
+    mcp_server_module.reindex_before_serve(Config())
+    head = subprocess.run(
+        ["git", "-C", cache_path("servelib"), "symbolic-ref", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert head == "release"
+    content = (cache_path("servelib") / "index.md").read_text(encoding="utf-8")
+    assert "# Release docs" in content
+
+
 def test_fetch_duplicate_name_requires_replace(home, tmp_path, capsys):
     archive = _docs_zip(tmp_path)
     assert main(["fetch", "--repo", archive.as_uri(), "--name", "dupe"]) == 0

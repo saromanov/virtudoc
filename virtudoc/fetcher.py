@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tarfile
@@ -19,6 +20,8 @@ GIT_TIMEOUT = 300
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 
 _DOWNLOAD_CHUNK = 1024 * 1024
+
+PIN_FILE = ".virtudoc-fetch.json"
 
 
 class FetchError(Exception):
@@ -125,6 +128,69 @@ def _single_root(extracted: Path) -> Path:
     return extracted
 
 
+def read_pinned_branch(dest: Path) -> str | None:
+    try:
+        data = json.loads((dest / PIN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    branch = data.get("branch")
+    return str(branch) if branch else None
+
+
+def _write_pinned_branch(dest: Path, branch: str | None) -> None:
+    if not branch:
+        return
+    try:
+        (dest / PIN_FILE).write_text(json.dumps({"branch": branch}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _pin_current_branch(dest: Path, branch: str | None = None) -> None:
+    pinned = branch
+    if not pinned:
+        result = _run_git(["git", "-C", str(dest), "symbolic-ref", "--short", "HEAD"])
+        pinned = result.stdout.strip() or None
+    _write_pinned_branch(dest, pinned)
+
+
+def ensure_pinned_checkout(dest: Path) -> str | None:
+    """Reset a fetch-cache clone to its pinned branch before reindexing.
+
+    Local operations only (NFR-01: nothing but `fetch` touches the
+    network): the checkout goes back to the local `origin/<branch>` ref
+    recorded by the last fetch. A dirty working tree is left untouched —
+    never destroy work in progress silently. Returns the pinned branch
+    when one is recorded, None otherwise.
+    """
+    pinned = read_pinned_branch(dest)
+    if not pinned or shutil.which("git") is None or not (dest / ".git").is_dir():
+        return pinned
+    try:
+        head = _run_git(["git", "-C", str(dest), "symbolic-ref", "--short", "-q", "HEAD"])
+        branch = head.stdout.strip() or None
+        if branch == pinned:
+            return pinned
+        status = _run_git(
+            [
+                "git",
+                "-C",
+                str(dest),
+                "status",
+                "--porcelain",
+                "--",
+                ".",
+                f":(exclude){PIN_FILE}",
+            ]
+        )
+        if status.stdout.strip():
+            return pinned
+        _run_git(["git", "-C", str(dest), "checkout", "-q", "-B", pinned, f"origin/{pinned}"])
+    except FetchError:
+        pass
+    return pinned
+
+
 def _run_git(args: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(args, capture_output=True, text=True, timeout=GIT_TIMEOUT)
@@ -147,10 +213,12 @@ def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
             )
             if result.returncode != 0:
                 raise FetchError(f"git checkout {branch} failed: {result.stderr.strip()}")
+            _pin_current_branch(dest, branch)
             return
         result = _run_git(["git", "-C", str(dest), "pull", "--ff-only"])
         if result.returncode != 0:
             raise FetchError(f"git pull failed: {result.stderr.strip()}")
+        _pin_current_branch(dest)
         return
     if dest.exists():
         raise FetchError(
@@ -170,3 +238,4 @@ def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
     if result.returncode != 0:
         shutil.rmtree(dest, ignore_errors=True)
         raise FetchError(f"git clone failed: {result.stderr.strip()}")
+    _pin_current_branch(dest, branch)

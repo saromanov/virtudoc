@@ -50,6 +50,12 @@ downloaded and extracted with path-traversal protection. Use `--branch`
 (or the config key `fetch.branch`) to pin a git branch other than the
 repo default; the flag overrides the config key.
 
+The chosen branch is recorded in a `.virtudoc-fetch.json` sidecar file
+inside the cache. Every `serve` start resets the clone to the pinned
+branch before reindexing (local-only checkout from the recorded
+`origin/<branch>` ref — no network, and a dirty working tree is left
+alone); `doctor` warns when the checkout and the pin disagree.
+
 ## list — index statistics
 
 ```bash
