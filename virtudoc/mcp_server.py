@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from contextlib import closing
 from typing import Any
 
 import anyio
@@ -52,8 +53,11 @@ def build_server(config: Config) -> MCPServer:
         ),
     )
 
-    def connect() -> sqlite3.Connection:
-        return open_db(config.db_path)
+    def connect() -> closing[sqlite3.Connection]:
+        # sqlite3.Connection's own context manager only manages the
+        # transaction; without closing() the connection object would leak
+        # on every tool call for the lifetime of the server process.
+        return closing(open_db(config.db_path))
 
     @server.tool(name="find-library", description=RESOLVE_DESCRIPTION)
     def find_library(libraryName: str, query: str) -> dict[str, Any]:

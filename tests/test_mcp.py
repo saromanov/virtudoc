@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -46,6 +47,33 @@ def _is_error(result) -> bool:
 def _payload(result) -> dict:
     assert result.content, "tool returned no content"
     return json.loads(result.content[0].text)
+
+
+def _connection_closed(conn) -> bool:
+    try:
+        conn.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        return True
+    return False
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_close_connections(home_index, monkeypatch):
+    import virtudoc.mcp_server as mcp_server_module
+
+    real_open_db = mcp_server_module.open_db
+    opened: list = []
+
+    def tracking_open_db(path):
+        connection = real_open_db(path)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(mcp_server_module, "open_db", tracking_open_db)
+    server = mcp_server_module.build_server(Config())
+    await server.call_tool("find-library", {"libraryName": "demo", "query": "middleware"})
+    assert opened, "tool should open a connection"
+    assert all(_connection_closed(conn) for conn in opened)
 
 
 @pytest.mark.anyio

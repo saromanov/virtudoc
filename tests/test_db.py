@@ -1,3 +1,5 @@
+import sqlite3
+
 from virtudoc.db import (
     connect,
     delete_document_chunks,
@@ -24,7 +26,63 @@ def test_schema_created(conn):
         "meta",
     } <= tables
     version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "1"
+    assert version == "2"
+
+
+_V1_SCHEMA = """
+CREATE TABLE IF NOT EXISTS libraries (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    description TEXT,
+    version TEXT,
+    added_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY,
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    rel_path TEXT NOT NULL,
+    title TEXT,
+    content_hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL,
+    UNIQUE (library_id, rel_path)
+);
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    library_id TEXT NOT NULL,
+    heading_path TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    token_est INTEGER NOT NULL,
+    code_ratio REAL NOT NULL DEFAULT 0
+);
+"""
+
+
+def test_migrates_v1_db_adds_lang_column(home, tmp_path):
+    path = tmp_path / "index.db"
+    old = sqlite3.connect(path)
+    old.executescript(_V1_SCHEMA)
+    old.execute("PRAGMA user_version=1")
+    old.execute("INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+                " VALUES ('local/old', 'old', '/tmp', 't', 't')")
+    old.commit()
+    old.close()
+
+    migrated = open_db(path)
+    columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
+    assert "lang" in columns
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    version = migrated.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()[0]
+    assert version == "2"
+    migrated.close()
+
+    fresh = open_db(path)
+    fresh.close()
 
 
 def test_wal_mode(tmp_path):

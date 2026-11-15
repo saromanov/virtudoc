@@ -50,7 +50,7 @@ def library_id(name: str) -> str:
     return f"local/{name}"
 
 
-def _check_name(name: str) -> None:
+def validate_name(name: str) -> None:
     if not _NAME_RE.match(name):
         raise ValueError(
             f"invalid library name '{name}': use lowercase latin letters, "
@@ -67,7 +67,7 @@ def add_library(
     description: str | None = None,
     replace: bool = False,
 ) -> str:
-    _check_name(name)
+    validate_name(name)
     source = Path(source).expanduser().resolve()
     if not source.is_dir():
         raise ValueError(f"source directory not found: {source}")
@@ -92,8 +92,10 @@ def add_library(
 
 def delete_library(conn: sqlite3.Connection, name: str) -> None:
     lib_id = library_id(name)
-    for (chunk_id,) in conn.execute("SELECT id FROM chunks WHERE library_id = ?", (lib_id,)):
-        conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (chunk_id,))
+    conn.execute(
+        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
+        (lib_id,),
+    )
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.commit()
     logger.info("deleted library %s", lib_id)
@@ -198,6 +200,7 @@ def index_library(
                     text=chunk.text,
                     token_est=chunk.token_est,
                     code_ratio=chunk.code_ratio,
+                    lang=chunk.lang,
                 )
             stats.changed += 1
             logger.debug("indexed %s: %d chunks", rel_path, len(chunks))

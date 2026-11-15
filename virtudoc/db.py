@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _YO_MAP = str.maketrans({"ё": "е", "Ё": "Е"})
 
@@ -59,7 +59,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             ord INTEGER NOT NULL,
             text TEXT NOT NULL,
             token_est INTEGER NOT NULL,
-            code_ratio REAL NOT NULL DEFAULT 0
+            code_ratio REAL NOT NULL DEFAULT 0,
+            lang TEXT NOT NULL DEFAULT ''
         );
 
         CREATE INDEX IF NOT EXISTS idx_chunks_library ON chunks(library_id);
@@ -94,6 +95,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
         INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '1');
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+    if columns and "lang" not in columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN lang TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -126,13 +134,15 @@ def insert_chunk(
     text: str,
     token_est: int,
     code_ratio: float,
+    lang: str = "",
 ) -> int:
     cur = conn.execute(
         """
-        INSERT INTO chunks (document_id, library_id, heading_path, ord, text, token_est, code_ratio)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO chunks
+            (document_id, library_id, heading_path, ord, text, token_est, code_ratio, lang)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (document_id, library_id, heading_path, ord_, text, token_est, code_ratio),
+        (document_id, library_id, heading_path, ord_, text, token_est, code_ratio, lang),
     )
     chunk_id = int(cur.lastrowid)
     conn.execute(

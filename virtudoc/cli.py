@@ -53,10 +53,10 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
                 description=args.description,
                 replace=args.replace,
             )
-        except (LibraryExistsError, ValueError) as exc:
+            stats = index_library(conn, lib_id, _chunker_from_config(cfg))
+        except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        stats = index_library(conn, lib_id, _chunker_from_config(cfg))
     print(f"added library {lib_id}")
     print(stats.summary())
     _print_skipped(stats.skipped_files)
@@ -286,7 +286,7 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     branch = args.branch or (str(configured_branch) if configured_branch else None)
     try:
         source = fetch_source(args.repo, args.name, branch=branch)
-    except FetchError as exc:
+    except (FetchError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     with _open(cfg) as conn:
@@ -299,10 +299,10 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
                 description=args.repo,
                 replace=args.replace,
             )
-        except (LibraryExistsError, ValueError) as exc:
+            stats = index_library(conn, lib_id, _chunker_from_config(cfg))
+        except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        stats = index_library(conn, lib_id, _chunker_from_config(cfg))
     print(f"fetched {args.repo} into {source}")
     print(f"added library {lib_id}")
     print(stats.summary())
@@ -369,7 +369,7 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
                     replace=True,
                 )
                 stats = index_library(conn, lib_id, chunker)
-            except (LibraryExistsError, ValueError, OSError) as exc:
+            except (LibraryExistsError, ValueError, OSError, IndexLockError) as exc:
                 print(f"error: {name}: {exc}", file=sys.stderr)
                 failed += 1
                 continue

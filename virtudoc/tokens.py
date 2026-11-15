@@ -17,5 +17,11 @@ def estimate_tokens(text: str) -> int:
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
     if estimate_tokens(text) <= max_tokens:
         return text
-    budget = max_tokens * LATIN_CHARS_PER_TOKEN
-    return text[:budget].rstrip() + "…"
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(text[:mid]) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + "…"

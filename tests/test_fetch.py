@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from virtudoc import fetcher as fetcher_module
 from virtudoc.cli import main
 from virtudoc.db import open_db
 from virtudoc.fetcher import FetchError, cache_path, fetch_source
@@ -57,6 +58,48 @@ def test_fetch_rejects_zip_slip(home, tmp_path):
     with pytest.raises(FetchError, match="unsafe path"):
         fetch_source(archive.as_uri(), "evil")
     assert main(["fetch", "--repo", archive.as_uri(), "--name", "evil"]) == 1
+
+
+def test_fetch_rejects_bad_name(home, tmp_path, capsys):
+    archive = _docs_zip(tmp_path)
+    with pytest.raises(ValueError, match="invalid library name"):
+        fetch_source(archive.as_uri(), "../escape")
+    assert main(["fetch", "--repo", archive.as_uri(), "--name", "../escape"]) == 1
+    assert "invalid library name" in capsys.readouterr().err
+    assert not (home / "escape").exists()
+
+
+def test_fetch_rejects_zip_symlink(home, tmp_path):
+    archive = tmp_path / "link.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        info = zipfile.ZipInfo("docs-repo/passwd")
+        info.external_attr = 0o120777 << 16  # symlink file mode
+        zf.writestr(info, "/etc/passwd")
+        zf.writestr("docs-repo/index.md", "# Linked\n")
+    with pytest.raises(FetchError, match="unsafe path"):
+        fetch_source(archive.as_uri(), "evil-link")
+    assert not (home / "fetch" / "evil-link").exists()
+
+
+def test_fetch_download_size_cap(home, tmp_path, monkeypatch):
+    archive = _docs_zip(tmp_path)
+    monkeypatch.setattr(fetcher_module, "MAX_DOWNLOAD_BYTES", 16)
+    with pytest.raises(FetchError, match="size limit"):
+        fetch_source(archive.as_uri(), "capped")
+    assert not (home / "fetch" / "capped").exists()
+
+
+def test_fetch_git_timeout_is_clean_error(home, monkeypatch, capsys):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+
+    def expired(args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args, timeout=fetcher_module.GIT_TIMEOUT)
+
+    monkeypatch.setattr(fetcher_module.subprocess, "run", expired)
+    with pytest.raises(FetchError, match="timed out"):
+        fetch_source("https://example.com/repo.git", "slow")
+    assert not (home / "fetch" / "slow").exists()
 
 
 def test_fetch_git_local_clone(home, tmp_path):

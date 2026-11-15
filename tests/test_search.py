@@ -83,6 +83,28 @@ def test_search_section_filter(indexed, conn):
     assert any(s.heading_path.startswith("Руководство → API") for s in unfiltered.snippets)
 
 
+def test_language_boost_prefers_code_language(indexed, conn, tmp_path):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.md").write_text(
+        "# Очередь\n\nочередь задач планировщик\n\n```python\nworker.start(queue)\n```\n",
+        encoding="utf-8",
+    )
+    (src / "b.md").write_text("# Очередь\n\nОчередь доставка подписчикам.\n", encoding="utf-8")
+    lib_id = add_library(conn, src, "langs")
+    index_library(conn, lib_id, Chunker())
+
+    plain = search(conn, "очередь", library_id=lib_id)
+    boosted = search(conn, "очередь", library_id=lib_id, language="python")
+    plain_scores = {s.source: s.score for s in plain.snippets}
+    boosted_scores = {s.source: s.score for s in boosted.snippets}
+    assert boosted_scores["a.md"] > plain_scores["a.md"]
+    assert boosted_scores["b.md"] == plain_scores["b.md"]
+
+
 def test_library_outline_tree(indexed, conn):
     tree = library_outline(conn, "local/demo")
     roots = {node.section: node for node in tree}

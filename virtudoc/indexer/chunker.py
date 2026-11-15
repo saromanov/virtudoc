@@ -15,6 +15,7 @@ class Chunk:
     text: str
     token_est: int
     code_ratio: float
+    lang: str = ""
 
 
 def _split_oversized(text: str, max_tokens: int) -> list[str]:
@@ -82,6 +83,10 @@ class Chunker:
                 return
             code_chars = sum(len(block.text) for block in current_blocks if block.kind == "code")
             total_chars = sum(len(block.text) for block in current_blocks)
+            lang = next(
+                (block.lang for block in current_blocks if block.kind == "code" and block.lang),
+                "",
+            )
             chunks.append(
                 Chunk(
                     heading_path=current_path,
@@ -89,6 +94,7 @@ class Chunker:
                     text=text,
                     token_est=estimate_tokens(text),
                     code_ratio=round(code_chars / total_chars, 4) if total_chars else 0.0,
+                    lang=lang,
                 )
             )
             prev_text = text

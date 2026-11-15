@@ -8,10 +8,17 @@ import zipfile
 from pathlib import Path
 
 from .config import data_dir
+from .indexer.indexer import validate_name
 
 ARCHIVE_SUFFIXES = (".zip", ".tar.gz", ".tgz", ".tar")
 
 DOWNLOAD_TIMEOUT = 120
+
+GIT_TIMEOUT = 300
+
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+
+_DOWNLOAD_CHUNK = 1024 * 1024
 
 
 class FetchError(Exception):
@@ -29,6 +36,7 @@ def fetch_source(repo_url: str, name: str, branch: str | None = None) -> Path:
     For git URLs, branch selects a non-default branch; archive URLs encode
     the branch in the URL already.
     """
+    validate_name(name)
     dest = cache_path(name)
     lower = repo_url.lower().split("?", 1)[0]
     if lower.endswith(".zip"):
@@ -38,6 +46,20 @@ def fetch_source(repo_url: str, name: str, branch: str | None = None) -> Path:
     else:
         _fetch_git(repo_url, dest, branch)
     return dest
+
+
+def _read_capped(response, cap: int) -> bytes:
+    parts: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(_DOWNLOAD_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise FetchError(f"download exceeds the size limit of {cap} bytes")
+        parts.append(chunk)
+    return b"".join(parts)
 
 
 def _fetch_archive(url: str, dest: Path, *, kind: str) -> None:
@@ -51,9 +73,11 @@ def _fetch_archive(url: str, dest: Path, *, kind: str) -> None:
     archive_file = tmp / f"archive.{kind}"
     try:
         with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
-            archive_file.write_bytes(response.read())
-    except (OSError, ValueError) as exc:
+            archive_file.write_bytes(_read_capped(response, MAX_DOWNLOAD_BYTES))
+    except (OSError, ValueError, FetchError) as exc:
         shutil.rmtree(tmp, ignore_errors=True)
+        if isinstance(exc, FetchError):
+            raise
         raise FetchError(f"failed to download {url}: {exc}") from exc
     try:
         if kind == "zip":
@@ -74,6 +98,8 @@ def _fetch_archive(url: str, dest: Path, *, kind: str) -> None:
 def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
     base = dest.resolve()
     for member in zf.infolist():
+        if (member.external_attr >> 16) & 0o170000 == 0o120000:  # symlink mode bits
+            raise FetchError(f"unsafe path in archive: {member.filename!r}")
         target = (dest / member.filename).resolve()
         if not str(target).startswith(str(base) + "/"):
             raise FetchError(f"unsafe path in archive: {member.filename!r}")
@@ -99,31 +125,30 @@ def _single_root(extracted: Path) -> Path:
     return extracted
 
 
+def _run_git(args: list[str]) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        raise FetchError(
+            f"git command timed out after {GIT_TIMEOUT}s: {' '.join(args[:4])}"
+        ) from exc
+
+
 def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
     if shutil.which("git") is None:
         raise FetchError("git is not installed; cannot clone repositories")
     if (dest / ".git").is_dir():
         if branch:
-            result = subprocess.run(
-                ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", branch],
-                capture_output=True,
-                text=True,
-            )
+            result = _run_git(["git", "-C", str(dest), "fetch", "--depth", "1", "origin", branch])
             if result.returncode != 0:
                 raise FetchError(f"git fetch of branch '{branch}' failed: {result.stderr.strip()}")
-            result = subprocess.run(
-                ["git", "-C", str(dest), "checkout", "-q", "-B", branch, "FETCH_HEAD"],
-                capture_output=True,
-                text=True,
+            result = _run_git(
+                ["git", "-C", str(dest), "checkout", "-q", "-B", branch, "FETCH_HEAD"]
             )
             if result.returncode != 0:
                 raise FetchError(f"git checkout {branch} failed: {result.stderr.strip()}")
             return
-        result = subprocess.run(
-            ["git", "-C", str(dest), "pull", "--ff-only"],
-            capture_output=True,
-            text=True,
-        )
+        result = _run_git(["git", "-C", str(dest), "pull", "--ff-only"])
         if result.returncode != 0:
             raise FetchError(f"git pull failed: {result.stderr.strip()}")
         return
@@ -137,7 +162,11 @@ def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
     if branch:
         cmd += ["--branch", branch]
     cmd += [url, str(dest)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = _run_git(cmd)
+    except FetchError:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
     if result.returncode != 0:
         shutil.rmtree(dest, ignore_errors=True)
         raise FetchError(f"git clone failed: {result.stderr.strip()}")

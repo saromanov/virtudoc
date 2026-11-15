@@ -91,7 +91,7 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
 |---|---|---|
 | `libraries` | Library registry | `id` (`local/<name>`), `source_path`, `version`, `updated_at` |
 | `documents` | Indexed files | `library_id`, `rel_path`, `content_hash`, `indexed_at` |
-| `chunks` | Unit of retrieval | `heading_path`, `ord`, `text`, `token_est`, `code_ratio` |
+| `chunks` | Unit of retrieval | `heading_path`, `ord`, `text`, `token_est`, `code_ratio`, `lang` |
 | `chunks_fts` | Virtual FTS5 table | `text` (external content of `chunks`), linked by `rowid` |
 | `notes` | Project notes (KF-03, M3) | `library_id`, `text`, `created_at` |
 | `project_links` | Manifest links (KF-04, M3) | `manifest_path`, `dep_version` |
@@ -99,7 +99,9 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
 
 The `heading_path` field is the single source of truth for the topic boost
 and the outline mode (KF-05). `code_ratio` supports the code-share control
-of output (FR-18). The schema version is recorded in `meta` and
+of output (FR-18). The `lang` field stores the fence language of the first
+annotated code block in the chunk and feeds the `language` boost of
+`get-library-docs`. The schema version is recorded in `meta` and
 `PRAGMA user_version` — migrations build on it.
 
 ## Configuration

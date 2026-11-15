@@ -37,7 +37,7 @@ class SearchResult:
 
 def tokenize(query: str) -> list[str]:
     raw = fts_normalize(query.lower())
-    tokens = [tok.strip('"') for tok in _TOKEN_RE.findall(raw)]
+    tokens = _TOKEN_RE.findall(raw)
     return [tok for tok in dict.fromkeys(tokens) if tok]
 
 
@@ -110,7 +110,7 @@ def _fetch_candidates(
     section: str | None = None,
 ) -> list[sqlite3.Row]:
     sql = """
-        SELECT c.id, c.heading_path, c.text, c.token_est, d.rel_path,
+        SELECT c.id, c.heading_path, c.text, c.token_est, c.lang, d.rel_path,
                bm25(chunks_fts) AS rank
         FROM chunks_fts
         JOIN chunks c ON c.id = chunks_fts.rowid
@@ -170,7 +170,7 @@ def search(
     for position, row in enumerate(candidates):
         base = 1.0 / (position + 1)
         score = base + (TOPIC_BONUS if _topic_boost(row, tokens) else 0.0)
-        if language and f"```{language}" in row["text"]:
+        if language and (row["lang"] or "").lower() == language.lower():
             score += 0.15
         scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)

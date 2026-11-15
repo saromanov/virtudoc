@@ -32,6 +32,39 @@ def test_add_duplicate_errors(home, docs_dir, capsys):
     assert "already exists" in err
 
 
+def test_add_reports_lock_error(home, tmp_path, capsys, monkeypatch):
+    import virtudoc.cli as cli_module
+    from virtudoc.indexer.indexer import IndexLockError
+
+    def locked(*args, **kwargs):
+        raise IndexLockError("failed to acquire the index lock")
+
+    monkeypatch.setattr(cli_module, "index_library", locked)
+    docs = tmp_path / "lockdocs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n\nТекст.\n", encoding="utf-8")
+    assert main(["add", str(docs), "--name", "locklib"]) == 1
+    assert "error: failed to acquire the index lock" in capsys.readouterr().err
+
+
+def test_import_reports_lock_error(home, docs_dir, tmp_path, capsys, monkeypatch):
+    import virtudoc.cli as cli_module
+    from virtudoc.indexer.indexer import IndexLockError
+
+    def locked(*args, **kwargs):
+        raise IndexLockError("locked")
+
+    monkeypatch.setattr(cli_module, "index_library", locked)
+    setup = tmp_path / "setup.toml"
+    setup.write_text(
+        f'[[libraries]]\nname = "demo"\npath = "{docs_dir}"\n', encoding="utf-8"
+    )
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "failed: 1" in captured.out
+    assert "error: demo: locked" in captured.err
+
+
 def test_update_command(home, docs_dir, capsys):
     main(["add", str(docs_dir), "--name", "demo"])
     capsys.readouterr()
