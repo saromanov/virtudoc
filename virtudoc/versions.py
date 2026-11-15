@@ -9,7 +9,15 @@ from pathlib import Path
 
 from .db import utc_now
 
-MANIFEST_CANDIDATES = ("pyproject.toml", "package.json", "requirements.txt", "go.mod")
+MANIFEST_CANDIDATES = (
+    "pyproject.toml",
+    "package.json",
+    "requirements.txt",
+    "go.mod",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+)
 
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
 _REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
@@ -67,6 +75,10 @@ def extract_dep_version(manifest_path: Path, library_name: str) -> str | None:
             return _from_requirements(manifest_path, name)
         if manifest_path.name == "go.mod":
             return _from_go_mod(manifest_path, name)
+        if manifest_path.name in ("uv.lock", "poetry.lock"):
+            return _from_package_lock(manifest_path, name)
+        if manifest_path.name == "Pipfile.lock":
+            return _from_pipfile_lock(manifest_path, name)
     except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError):
         return None
     return None
@@ -92,6 +104,18 @@ def _from_pyproject(path: Path, name: str) -> str | None:
         match = _REQ_NAME_RE.match(req)
         if match and normalize_name(match.group(1)) == name:
             return _match_version(req[match.end() :])
+    return _from_poetry_section(data, name)
+
+
+def _from_poetry_section(data: dict, name: str) -> str | None:
+    poetry = data.get("tool", {}).get("poetry", {})
+    dependencies = poetry.get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        return None
+    for dep, spec in dependencies.items():
+        if normalize_name(dep) == name:
+            spec_value = spec.get("version") if isinstance(spec, dict) else spec
+            return _match_version(str(spec_value)) if spec_value else None
     return None
 
 
@@ -122,6 +146,30 @@ def _from_go_mod(path: Path, name: str) -> str | None:
         match = _GO_MOD_RE.match(line)
         if match and normalize_name(match.group(1).rsplit("/", 1)[-1]) == name:
             return match.group(2)
+    return None
+
+
+def _from_package_lock(path: Path, name: str) -> str | None:
+    """uv.lock and poetry.lock share the [[package]] table shape."""
+    with open(path, "rb") as fh:
+        data = tomllib.load(fh)
+    for package in data.get("package", []):
+        if not isinstance(package, dict):
+            continue
+        if normalize_name(str(package.get("name", ""))) == name:
+            version = package.get("version")
+            return str(version) if version else None
+    return None
+
+
+def _from_pipfile_lock(path: Path, name: str) -> str | None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for section in ("default", "develop"):
+        deps = data.get(section, {})
+        for dep, info in deps.items():
+            if normalize_name(dep) == name:
+                spec = info.get("version") if isinstance(info, dict) else None
+                return _match_version(spec)
     return None
 
 

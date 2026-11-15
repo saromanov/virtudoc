@@ -13,7 +13,10 @@ virtudoc link mylib --project /path/to/consuming/project
 The command:
 
 1. Finds the project's dependency manifest — `pyproject.toml`,
-   `package.json`, `requirements.txt` or `go.mod` (in this order).
+   `package.json`, `requirements.txt`, `go.mod`, `uv.lock`, `poetry.lock`
+   or `Pipfile.lock` (in this order; lockfiles are checked last, as
+   fallbacks). Poetry-style `[tool.poetry.dependencies]` in
+   `pyproject.toml` is recognized too.
 2. Locates the dependency by the library name (matching is
    case-insensitive; underscores and hyphens are treated as equivalent).
 3. Records the expected version in the index.

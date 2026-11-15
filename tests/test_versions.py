@@ -69,6 +69,91 @@ def test_extract_from_go_mod(tmp_path):
     assert extract_dep_version(manifest, "other") is None
 
 
+def test_extract_from_poetry_pyproject(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        """
+[tool.poetry.dependencies]
+python = "^3.11"
+demo-lib = "^1.2"
+complex = {version = ">=2.0,<3"}
+""",
+        encoding="utf-8",
+    )
+    assert extract_dep_version(manifest, "demo-lib") == "1.2"
+    assert extract_dep_version(manifest, "complex") == "2.0"
+    assert extract_dep_version(manifest, "python") == "3.11"
+    assert extract_dep_version(manifest, "absent") is None
+
+
+def test_extract_from_uv_lock(tmp_path):
+    manifest = tmp_path / "uv.lock"
+    manifest.write_text(
+        """
+version = 1
+[[package]]
+name = "click"
+version = "8.1.7"
+[[package]]
+name = "demo-lib"
+version = "2.4.0"
+""",
+        encoding="utf-8",
+    )
+    assert extract_dep_version(manifest, "demo-lib") == "2.4.0"
+    assert extract_dep_version(manifest, "click") == "8.1.7"
+    assert extract_dep_version(manifest, "absent") is None
+
+
+def test_extract_from_poetry_lock(tmp_path):
+    manifest = tmp_path / "poetry.lock"
+    manifest.write_text(
+        """
+[[package]]
+name = "demo-lib"
+version = "3.0.1"
+""",
+        encoding="utf-8",
+    )
+    assert extract_dep_version(manifest, "demo-lib") == "3.0.1"
+
+
+def test_extract_from_pipfile_lock(tmp_path):
+    manifest = tmp_path / "Pipfile.lock"
+    manifest.write_text(
+        json.dumps(
+            {
+                "default": {"demo-lib": {"version": "==1.5.2"}},
+                "develop": {"pytest": {"version": "==8.0.0"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert extract_dep_version(manifest, "demo-lib") == "1.5.2"
+    assert extract_dep_version(manifest, "pytest") == "8.0.0"
+    assert extract_dep_version(manifest, "absent") is None
+
+
+def test_detect_manifest_lockfiles_last(tmp_path):
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    assert detect_manifest(tmp_path).name == "uv.lock"
+    (tmp_path / "requirements.txt").write_text("demo==1.0\n", encoding="utf-8")
+    assert detect_manifest(tmp_path).name == "requirements.txt"
+
+
+def test_link_uses_uv_lock(conn, docs_dir, tmp_path):
+    project = tmp_path / "uvproject"
+    project.mkdir()
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "4.1.0"\n', encoding="utf-8"
+    )
+    lib_id = add_library(conn, docs_dir, "demo", version="4.0")
+    index_library(conn, lib_id, Chunker())
+    info = link_library(conn, lib_id, project)
+    assert info.dep_version == "4.1.0"
+    assert mismatch_payload(conn, lib_id) is not None
+
+
 def test_version_status():
     assert version_status("1.2.0", "1.2.0") == "match"
     assert version_status("2.0.0", "1.9.9") == "mismatch"
