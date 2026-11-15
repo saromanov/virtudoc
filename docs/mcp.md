@@ -11,6 +11,16 @@ appear in the agent, use the absolute path as `command` — find it with
 `which virtudoc` — or add the server's `bin` directory to the MCP config's
 `env.PATH`.
 
+The fastest way to get a correct snippet is:
+
+```bash
+virtudoc mcp-config
+```
+
+It prints a ready `mcpServers` block with the absolute server path and,
+when `VIRTUDOC_HOME` is set in your shell, an `env` block that pins the
+data directory for the agent.
+
 **Claude Code** — `.mcp.json` in the project root, or:
 
 ```bash
