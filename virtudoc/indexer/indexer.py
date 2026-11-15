@@ -97,6 +97,10 @@ def delete_library(conn: sqlite3.Connection, name: str) -> None:
         "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
         (lib_id,),
     )
+    conn.execute(
+        "DELETE FROM chunks_tri WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
+        (lib_id,),
+    )
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.commit()
     logger.info("deleted library %s", lib_id)
@@ -228,6 +232,10 @@ def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
     """Drop every indexed document of a library, keeping registration and notes."""
     conn.execute(
         "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
+        (lib_id,),
+    )
+    conn.execute(
+        "DELETE FROM chunks_tri WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
         (lib_id,),
     )
     conn.execute("DELETE FROM documents WHERE library_id = ?", (lib_id,))

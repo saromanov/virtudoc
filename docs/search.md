@@ -13,7 +13,10 @@ terminal and for agents calling `get-library-docs`.
    - prefix `AND` — words are stemmed by stripping common endings and
      matched as prefixes, so Russian inflections resolve: `пакетная`
      finds `пакетной`, `запросов` finds `запросы`;
-   - `OR` — any word is enough (ranked by relevance).
+   - `OR` — any word is enough (ranked by relevance);
+   - trigram `OR` — a second index over the same chunks matches query
+     words as *substrings*, so subword hits inside compound identifiers
+     (`auth` inside `middlewareAuth`) still surface.
 4. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
    file name lexically matches query words get a **topic boost**; chunks
    containing code blocks in the requested `language` are promoted.

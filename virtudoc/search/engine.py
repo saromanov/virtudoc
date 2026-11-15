@@ -106,20 +106,26 @@ def _or_expression(tokens: list[str]) -> str:
     return " OR ".join(f'"{tok}" OR {_stem(tok)}*' for tok in tokens)
 
 
+def _tri_expression(tokens: list[str]) -> str | None:
+    parts = [f'"{tok}"' for tok in tokens if len(tok) >= 3]
+    return " OR ".join(parts) or None
+
+
 def _fetch_candidates(
     conn: sqlite3.Connection,
     match: str,
     library_id: str | None,
     limit: int,
     section: str | None = None,
+    table: str = "chunks_fts",
 ) -> list[sqlite3.Row]:
-    sql = """
+    sql = f"""
         SELECT c.id, c.heading_path, c.text, c.token_est, c.lang, d.rel_path,
-               bm25(chunks_fts) AS rank
-        FROM chunks_fts
-        JOIN chunks c ON c.id = chunks_fts.rowid
+               bm25({table}) AS rank
+        FROM {table}
+        JOIN chunks c ON c.id = {table}.rowid
         JOIN documents d ON d.id = c.document_id
-        WHERE chunks_fts MATCH ?
+        WHERE {table} MATCH ?
     """
     params: list[object] = [match]
     if library_id:
@@ -220,6 +226,17 @@ def search(
         candidates = _fetch_candidates(
             conn, _or_expression(tokens), library_id, max_results * 3 * page, section
         )
+    if not candidates:
+        trigram_match = _tri_expression(tokens)
+        if trigram_match:
+            candidates = _fetch_candidates(
+                conn,
+                trigram_match,
+                library_id,
+                max_results * 3 * page,
+                section,
+                table="chunks_tri",
+            )
 
     scored: list[tuple[float, sqlite3.Row]] = []
     for position, row in enumerate(candidates):

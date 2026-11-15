@@ -47,6 +47,24 @@ def test_search_or_fallback(indexed, conn):
     assert result.snippets
 
 
+def test_trigram_fallback_finds_subword(tmp_path, conn):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "auth.md").write_text(
+        "# Авторизация\n\nВнутри функции вызывается middlewareAuthWrapper для проверки.\n",
+        encoding="utf-8",
+    )
+    lib_id = add_library(conn, src, "tri")
+    index_library(conn, lib_id, Chunker())
+    # "auth" is a prefix of the standalone token but a subword of middlewareAuthWrapper
+    result = search(conn, "auth", library_id=lib_id)
+    assert result.snippets
+    assert result.snippets[0].source == "auth.md"
+
+
 def test_prefix_matching_recalls_inflected_forms(indexed, conn):
     result = search(conn, "обработка конвейер")
     assert result.snippets
