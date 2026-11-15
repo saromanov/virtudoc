@@ -1,3 +1,6 @@
+import os
+import time
+
 import pytest
 
 from virtudoc.indexer.chunker import Chunker
@@ -9,6 +12,8 @@ from virtudoc.indexer.indexer import (
     get_library,
     index_library,
     list_libraries,
+    refresh_if_stale,
+    reindex_library,
     update_all,
 )
 
@@ -134,3 +139,69 @@ def test_delete_library_removes_chunks(conn, docs_dir):
     assert conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == 0
     with pytest.raises(LibraryNotFoundError):
         get_library(conn, "demo")
+
+
+def test_reindex_rebuilds_from_scratch(conn, tmp_path):
+    big = tmp_path / "big"
+    big.mkdir()
+    long_text = ("Слово " * 400 + "\n\n") * 3
+    (big / "a.md").write_text("# Раздел\n\n" + long_text, encoding="utf-8")
+    (big / "b.md").write_text("# Ещё\n\n" + long_text, encoding="utf-8")
+    lib_id = add_library(conn, big, "demo")
+    index_library(conn, lib_id, Chunker())
+    before = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    stats = reindex_library(conn, lib_id, Chunker(target_tokens=60, max_tokens=120))
+    assert stats.changed == 2
+    after = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert after > before  # smaller chunks -> more chunks
+    doc_count = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    assert doc_count == 2
+
+
+def test_reindex_unknown_library(conn):
+    with pytest.raises(LibraryNotFoundError):
+        reindex_library(conn, "local/nope", Chunker())
+
+
+def _age_sources(docs_dir, seconds: float) -> None:
+    """Set every source mtime into the past, simulating 'indexed after edit'."""
+    old = time.time() - seconds
+    for path in docs_dir.iterdir():
+        if path.is_file():
+            os.utime(path, (old, old))
+
+
+def test_refresh_if_stale_detects_modified_file(conn, docs_dir):
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    _age_sources(docs_dir, 60)
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None  # fresh
+
+    (docs_dir / "guide.md").write_text(
+        "# Изменено\n\nНовый контент после индексации.\n", encoding="utf-8"
+    )
+    stats = refresh_if_stale(conn, lib_id, Chunker())
+    assert stats is not None and stats.changed == 1
+    _age_sources(docs_dir, 60)
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None  # fresh again
+
+
+def test_refresh_if_stale_detects_deleted_and_added_files(conn, docs_dir):
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    _age_sources(docs_dir, 60)
+    (docs_dir / "api.md").unlink()
+    stats = refresh_if_stale(conn, lib_id, Chunker())
+    assert stats is not None and stats.removed == 1
+    _age_sources(docs_dir, 60)
+    (docs_dir / "extra.md").write_text(
+        "# Extra\n\nНовый файл для проверки счётчика.\n", encoding="utf-8"
+    )
+    stats = refresh_if_stale(conn, lib_id, Chunker())
+    assert stats is not None and stats.changed == 1
+    _age_sources(docs_dir, 60)
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None
+
+
+def test_refresh_if_stale_unknown_library(conn):
+    assert refresh_if_stale(conn, "local/nope", Chunker()) is None

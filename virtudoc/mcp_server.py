@@ -13,7 +13,7 @@ from . import __version__
 from .config import Config, data_dir
 from .db import open_db
 from .indexer.chunker import Chunker
-from .indexer.indexer import index_library
+from .indexer.indexer import index_library, refresh_if_stale
 from .logging_setup import get_logger
 from .notes import relevant_notes
 from .search.engine import library_outline, resolve_libraries, search, top_level_sections
@@ -51,6 +51,11 @@ def build_server(config: Config) -> MCPServer:
             "find the library id, 2) get-library-docs with a keyword query. "
             "Everything runs offline on the user's machine."
         ),
+    )
+    chunker = Chunker(
+        target_tokens=config.get_int("chunk.target_tokens"),
+        max_tokens=config.get_int("chunk.max_tokens"),
+        overlap_tokens=config.get_int("chunk.overlap_tokens"),
     )
 
     def connect() -> closing[sqlite3.Connection]:
@@ -105,6 +110,8 @@ def build_server(config: Config) -> MCPServer:
                     f"library not found: {libraryId!r}; "
                     "call find-library to list available libraries"
                 )
+            if config.get_bool("index.auto_refresh"):
+                refresh_if_stale(conn, libraryId, chunker)
             notes = [
                 {"id": note.id, "text": note.text, "created_at": note.created_at}
                 for note in relevant_notes(

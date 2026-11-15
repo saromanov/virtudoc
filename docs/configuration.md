@@ -17,6 +17,9 @@ target_tokens = 600                # target chunk size
 max_tokens = 1200                  # hard limit for a chunk
 overlap_tokens = 60                # overlap between adjacent chunks
 
+[index]
+auto_refresh = true                # reindex a library when the source is newer
+
 [search]
 default_tokens = 5000              # output budget for search/get-library-docs
 max_results = 20                   # max fragments per response
@@ -36,12 +39,20 @@ level = "INFO"                     # DEBUG, INFO, WARNING, ERROR
 ## Chunk settings only affect new indexing
 
 Changing `chunk.*` does not rebuild the existing index. To apply new chunk
-settings to a library, remove and add it again:
+settings to a library, run a full rebuild:
 
 ```bash
-virtudoc remove mylib --yes
-virtudoc add /path/to/docs --name mylib
+virtudoc reindex mylib
 ```
+
+## Auto-refresh on tool calls
+
+With `index.auto_refresh = true` (default), every `get-library-docs` call
+first checks whether the source changed since the last indexing — a file
+count difference or any source file newer than `indexed_at` triggers a
+cheap incremental reindex before the search. Deleted files are caught by
+the count check. Set it to `false` on huge documentation trees or when
+another indexing process shares the data directory.
 
 ## Environment variables
 

@@ -278,3 +278,28 @@ async def test_mcp_empty_search_returns_section_hints(home_index):
             assert payload["snippets"] == []
             sections = {s["section"] for s in payload["sections"]}
             assert "Руководство" in sections
+
+
+@pytest.mark.anyio
+async def test_mcp_refreshes_stale_library_on_tool_call(home, docs_dir):
+    import virtudoc.mcp_server as mcp_server_module
+
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs_dir, "demo")
+        index_library(conn, lib_id, Chunker())
+    server = mcp_server_module.build_server(Config())
+    before = await server.call_tool(
+        "get-library-docs", {"libraryId": "local/demo", "query": "поправка свежести"}
+    )
+    assert _payload(before)["snippets"] == []
+
+    (docs_dir / "fresh-late.md").write_text(
+        "# Свежесть\n\nПоправка свежести для автообновления индекса.\n",
+        encoding="utf-8",
+    )
+    after = await server.call_tool(
+        "get-library-docs", {"libraryId": "local/demo", "query": "поправка свежести"}
+    )
+    payload = _payload(after)
+    assert payload["snippets"]
+    assert payload["snippets"][0]["source"] == "fresh-late.md"
