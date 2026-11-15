@@ -4,6 +4,7 @@ import hashlib
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from ..db import delete_document_chunks, insert_chunk, utc_now
@@ -244,6 +245,53 @@ def reindex_library(
         raise LibraryNotFoundError(f"library not found: {lib_id}")
     clear_library_index(conn, lib_id)
     return index_library(conn, lib_id, chunker)
+
+
+def refresh_if_stale(
+    conn: sqlite3.Connection,
+    lib_id: str,
+    chunker: Chunker,
+) -> IndexStats | None:
+    """Reindex the library when the source changed since the last indexing.
+
+    Cheap heuristic (no network, no hashing): a difference in file count
+    or a source file modified after the last indexed_at triggers a full
+    incremental pass. Returns None when the index is fresh or the lock is
+    held by another process — a serving server must not fail on this.
+    """
+    row = conn.execute("SELECT source_path FROM libraries WHERE id = ?", (lib_id,)).fetchone()
+    if row is None:
+        return None
+    source = Path(row["source_path"])
+    if not source.is_dir():
+        return None
+    indexed_at = conn.execute(
+        "SELECT updated_at FROM libraries WHERE id = ?", (lib_id,)
+    ).fetchone()[0]
+    try:
+        indexed_ts = datetime.fromisoformat(indexed_at).timestamp()
+    except (TypeError, ValueError):
+        indexed_ts = 0.0
+    walked: WalkResult = walk_source(source)
+    if (
+        len(walked.files)
+        != conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE library_id = ?", (lib_id,)
+        ).fetchone()[0]
+    ):
+        return _safe_index(conn, lib_id, chunker)
+    latest = max((f.path.stat().st_mtime for f in walked.files if f.path.exists()), default=0.0)
+    if latest > indexed_ts:
+        return _safe_index(conn, lib_id, chunker)
+    return None
+
+
+def _safe_index(conn: sqlite3.Connection, lib_id: str, chunker: Chunker) -> IndexStats | None:
+    try:
+        return index_library(conn, lib_id, chunker)
+    except IndexLockError:
+        logger.debug("stale refresh skipped for %s: index lock held", lib_id)
+        return None
 
 
 def update_all(conn: sqlite3.Connection, chunker: Chunker) -> dict[str, IndexStats]:

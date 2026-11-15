@@ -52,8 +52,18 @@ minute, so even large documentation sets reindex quickly.
 
 Parser and chunker improvements only affect newly indexed content —
 unchanged files are skipped by hash. To rebuild existing libraries with the
-current parser and `chunk.*` settings, re-run `virtudoc import` (it replaces
-same-named libraries) or remove and add the library.
+current parser and `chunk.*` settings, run `virtudoc reindex <name>` (a
+full rebuild) or re-run `virtudoc import` (it replaces same-named
+libraries).
+
+## Auto-refresh while the server runs
+
+Each `get-library-docs` call first compares the source against
+`indexed_at` (config `index.auto_refresh`, on by default): a file added or
+deleted (count mismatch) or any file with a newer mtime triggers an
+incremental reindex before the search, so a long-running `serve` session
+always answers with current docs. The check is local-only: file stats,
+no network.
 
 ## The SQLite index
 

@@ -95,9 +95,11 @@ sections — or inspect the tree upfront with
 
 ## The agent does not see my latest edits
 
-**Fix:** indexing happens when `serve` starts, so new agent sessions are
-fresh automatically. For a session that is already running, execute
-`virtudoc update` — the next tool call sees the new data.
+Indexing happens when `serve` starts, and `get-library-docs` refreshes a
+library automatically when its source is newer than the index
+(`index.auto_refresh`). If you still see stale data: check that the edit
+is saved, that the server uses the same data directory (see the first
+section), and run `virtudoc update` to force an immediate refresh.
 
 ## The indexed docs keep changing / differ between machines
 
