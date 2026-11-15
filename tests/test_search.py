@@ -1,4 +1,4 @@
-from virtudoc.search.engine import library_outline, search, tokenize
+from virtudoc.search.engine import library_outline, search, tokenize, trim_to_window
 
 
 def test_tokenize_normalizes_yo():
@@ -69,6 +69,43 @@ def test_search_in_cyrillic_text(indexed, conn):
     result = search(conn, "очередь подписчикам")
     assert result.snippets
     assert result.snippets[0].source == "queue.txt"
+
+
+def test_trim_to_window_cuts_around_hits(tmp_path):
+    filler = "Заполнитель без совпадений. " * 200
+    needle = "конвейер обработки событий проходит через middleware слой."
+    text = f"{filler}\n{needle}\n{filler}"
+    cut = trim_to_window(text, ["конвейер", "middleware"], 50)
+    assert "конвейер" in cut
+    assert "middleware" in cut
+    from virtudoc.tokens import estimate_tokens
+
+    assert estimate_tokens(cut) < estimate_tokens(text) / 5
+    assert cut.startswith("… ")
+    assert cut.endswith(" …")
+
+
+def test_trim_to_window_short_text_untouched():
+    text = "короткий текст с middleware"
+    assert trim_to_window(text, ["middleware"], 400) == text
+
+
+def test_trim_to_window_disabled():
+    text = "хвост " * 500
+    assert trim_to_window(text, ["хвост"], 0) == text
+
+
+def test_search_window_tokens_trims_long_chunks(conn, docs_dir):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    full = search(conn, "middleware", library_id=lib_id, window_tokens=0)
+    trimmed = search(conn, "middleware", library_id=lib_id, window_tokens=30)
+    assert full.snippets and trimmed.snippets
+    assert len(trimmed.snippets[0].text) <= len(full.snippets[0].text)
+    assert "middleware" in trimmed.snippets[0].text.lower()
 
 
 def test_search_section_filter(indexed, conn):

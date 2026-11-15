@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..db import fts_normalize
-from ..tokens import estimate_tokens, truncate_to_tokens
+from ..tokens import (
+    CYRILLIC_CHARS_PER_TOKEN,
+    estimate_tokens,
+    truncate_to_tokens,
+)
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -134,6 +138,56 @@ def _topic_boost(row: sqlite3.Row, tokens: list[str]) -> bool:
     return any(token in haystack for token in tokens for haystack in haystacks)
 
 
+def _find_all(haystack: str, needle: str) -> list[int]:
+    if not needle:
+        return []
+    positions = []
+    i = haystack.find(needle)
+    while i != -1:
+        positions.append(i)
+        i = haystack.find(needle, i + 1)
+    return positions
+
+
+def _best_window(text: str, anchors: list[str], window_chars: int) -> tuple[int, int]:
+    """Start/end offsets of the text window holding the densest anchor cluster."""
+    lower = fts_normalize(text.lower())
+    hits = sorted({pos for anchor in anchors for pos in _find_all(lower, anchor)})
+    if not hits:
+        return 0, min(len(text), window_chars)
+    best_index, best_count = 0, 0
+    j = 0
+    for i in range(len(hits)):
+        while j < len(hits) and hits[j] - hits[i] < window_chars:
+            j += 1
+        if j - i > best_count:
+            best_index, best_count = i, j - i
+    start = max(0, hits[best_index] - window_chars // 4)
+    end = min(len(text), start + window_chars)
+    if start > 0:
+        cut = text.find("\n", start, min(start + 60, end))
+        if cut != -1:
+            start = cut + 1
+    if end < len(text):
+        cut = text.rfind("\n", max(end - 60, start), end)
+        if cut > start:
+            end = cut
+    return start, end
+
+
+def trim_to_window(text: str, tokens: list[str], window_tokens: int) -> str:
+    """Cut a long chunk down to a window around the densest query-term cluster."""
+    if window_tokens <= 0 or estimate_tokens(text) <= window_tokens:
+        return text
+    window_chars = window_tokens * CYRILLIC_CHARS_PER_TOKEN  # worst-case density
+    anchors = sorted({form for tok in tokens for form in (tok, _stem(tok))})
+    start, end = _best_window(text, anchors, window_chars)
+    cut = text[start:end].strip("\n")
+    prefix = "… " if start > 0 else ""
+    suffix = " …" if end < len(text) else ""
+    return f"{prefix}{cut}{suffix}"
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -144,6 +198,7 @@ def search(
     page: int = 1,
     language: str | None = None,
     section: str | None = None,
+    window_tokens: int = 0,
 ) -> SearchResult:
     tokens = tokenize(query)
     result = SearchResult(query=query, page=page)
@@ -181,16 +236,20 @@ def search(
         if len(result.snippets) >= max_results:
             break
         text = row["text"]
-        if row["token_est"] > remaining and result.snippets:
+        if window_tokens and row["token_est"] > window_tokens:
+            text = trim_to_window(text, tokens, window_tokens)
+        est = estimate_tokens(text)
+        if est > remaining and result.snippets:
             continue
-        if row["token_est"] > remaining:
+        if est > remaining:
             text = truncate_to_tokens(text, remaining)
+            est = estimate_tokens(text)
         snippet = Snippet(
             heading_path=row["heading_path"],
             source=row["rel_path"],
             text=text,
             score=round(score, 4),
-            tokens=estimate_tokens(text),
+            tokens=est,
         )
         result.snippets.append(snippet)
         remaining -= snippet.tokens

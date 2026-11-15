@@ -13,7 +13,7 @@ DEFAULTS: dict[str, dict[str, object]] = {
     "fetch": {"branch": None},
     "chunk": {"target_tokens": 600, "max_tokens": 1200, "overlap_tokens": 60},
     "index": {"auto_refresh": True},
-    "search": {"default_tokens": 5000, "max_results": 20},
+    "search": {"default_tokens": 5000, "max_results": 20, "snippet_window_tokens": 400},
     "notes": {"max_tokens": 800},
     "server": {
         "transport": "stdio",

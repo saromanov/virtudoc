@@ -17,10 +17,14 @@ terminal and for agents calling `get-library-docs`.
 4. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
    file name lexically matches query words get a **topic boost**; chunks
    containing code blocks in the requested `language` are promoted.
-5. **Assembly.** Fragments are appended until the token budget (default
-   5000) or the result limit (default 20) is reached. Overspending the
-   budget is not an error — the output is cut at a chunk boundary with a
-   10% margin. `page=2` returns the next slice of the same ranking.
+5. **Assembly.** Long chunks are cut down to a window around the densest
+   cluster of query-term occurrences (`search.snippet_window_tokens`,
+   400 by default, 0 disables the trimming) so the agent pays for the
+   relevant passage, not the whole page. Fragments are appended until the
+   token budget (default 5000) or the result limit (default 20) is
+   reached. Overspending the budget is not an error — the output is cut
+   at a chunk boundary with a 10% margin. `page=2` returns the next slice
+   of the same ranking.
 
 ## Tips for good queries
 

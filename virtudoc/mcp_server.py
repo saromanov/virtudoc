@@ -143,6 +143,7 @@ def build_server(config: Config) -> MCPServer:
                 page=page,
                 language=language,
                 section=section,
+                window_tokens=config.get_int("search.snippet_window_tokens"),
             )
             if not result.snippets:
                 return {
