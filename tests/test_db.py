@@ -66,8 +66,10 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     old = sqlite3.connect(path)
     old.executescript(_V1_SCHEMA)
     old.execute("PRAGMA user_version=1")
-    old.execute("INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
-                " VALUES ('local/old', 'old', '/tmp', 't', 't')")
+    old.execute(
+        "INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+        " VALUES ('local/old', 'old', '/tmp', 't', 't')"
+    )
     old.commit()
     old.close()
 
@@ -75,9 +77,7 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
     assert "lang" in columns
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
-    version = migrated.execute(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    ).fetchone()[0]
+    version = migrated.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
     assert version == "2"
     migrated.close()
 

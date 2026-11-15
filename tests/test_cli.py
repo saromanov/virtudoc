@@ -56,9 +56,7 @@ def test_import_reports_lock_error(home, docs_dir, tmp_path, capsys, monkeypatch
 
     monkeypatch.setattr(cli_module, "index_library", locked)
     setup = tmp_path / "setup.toml"
-    setup.write_text(
-        f'[[libraries]]\nname = "demo"\npath = "{docs_dir}"\n', encoding="utf-8"
-    )
+    setup.write_text(f'[[libraries]]\nname = "demo"\npath = "{docs_dir}"\n', encoding="utf-8")
     assert main(["import", str(setup)]) == 1
     captured = capsys.readouterr()
     assert "failed: 1" in captured.out
