@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -12,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from . import __version__
 from .config import Config, data_dir
 from .db import open_db
+from .fetcher import ensure_pinned_checkout
 from .indexer.chunker import Chunker
 from .indexer.indexer import index_library, refresh_if_stale
 from .logging_setup import get_logger
@@ -195,8 +197,17 @@ def reindex_before_serve(config: Config) -> None:
         overlap_tokens=config.get_int("chunk.overlap_tokens"),
     )
     with open_db(config.db_path) as conn:
-        rows = conn.execute("SELECT id FROM libraries ORDER BY id").fetchall()
+        rows = conn.execute("SELECT id, source_path FROM libraries ORDER BY id").fetchall()
         for row in rows:
+            source = Path(row["source_path"])
+            if (source / ".git").is_dir():
+                pinned = ensure_pinned_checkout(source)
+                if pinned:
+                    logger.info(
+                        "fetch cache for %s pinned to branch '%s' (reset locally, offline)",
+                        row["id"],
+                        pinned,
+                    )
             try:
                 stats = index_library(conn, row["id"], chunker)
             except Exception as exc:  # serve must start regardless
