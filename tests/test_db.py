@@ -26,7 +26,7 @@ def test_schema_created(conn):
         "meta",
     } <= tables
     version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "2"
+    assert version == "3"
 
 
 _V1_SCHEMA = """
@@ -76,13 +76,42 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     migrated = open_db(path)
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
     assert "lang" in columns
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
     version = migrated.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "2"
+    assert version == "3"
     migrated.close()
 
     fresh = open_db(path)
     fresh.close()
+
+
+def test_trigram_table_backfilled_for_pre_v3_dbs(home, tmp_path):
+    path = tmp_path / "index.db"
+    conn = open_db(path)
+    conn.execute("DROP TABLE chunks_tri")
+    conn.execute(
+        "INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+        " VALUES ('local/old', 'old', '/tmp', 't', 't')"
+    )
+    doc_id = conn.execute(
+        "INSERT INTO documents (library_id, rel_path, title, content_hash, indexed_at)"
+        " VALUES ('local/old', 'a.md', 'T', 'h', 't') RETURNING id"
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO chunks"
+        " (document_id, library_id, heading_path, ord, text, token_est, code_ratio)"
+        " VALUES (?, 'local/old', '', 0, 'Служебный идентификатор middlewareAuth', 5, 0.0)",
+        (doc_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = open_db(path)
+    rows = migrated.execute(
+        "SELECT rowid FROM chunks_tri WHERE chunks_tri MATCH '\"Auth\"'"
+    ).fetchall()
+    assert rows
+    migrated.close()
 
 
 def test_wal_mode(tmp_path):
@@ -167,6 +196,10 @@ def test_delete_document_removes_fts_rows(conn):
         0
     ]
     assert left == 0
+    tri_left = conn.execute(
+        "SELECT COUNT(*) FROM chunks_tri WHERE rowid = ?", (chunk_id,)
+    ).fetchone()[0]
+    assert tri_left == 0
 
 
 def test_open_db_idempotent(tmp_path):

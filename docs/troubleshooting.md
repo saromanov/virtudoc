@@ -87,7 +87,9 @@ version pinned in the project's dependency manifest have diverged.
 
 **Cause:** full-sentence queries rank poorly in FTS5.
 
-**Fix:** use keywords from the library's own terminology. When nothing
+**Fix:** use keywords from the library's own terminology. Subword
+fragments of identifiers (`auth`, `retry`) are matched by the trigram
+fallback; sentence-shaped queries still need keywords. When nothing
 matches, the output (and the MCP response) lists the library's top-level
 sections — or inspect the tree upfront with
 `virtudoc search "x" --name <name> --outline` and target a branch with

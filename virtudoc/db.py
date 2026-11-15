@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _YO_MAP = str.maketrans({"ё": "е", "Ё": "Е"})
 
@@ -29,6 +29,7 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    tri_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_tri'").fetchone()
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS libraries (
@@ -72,6 +73,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
             content_rowid='id'
         );
 
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_tri USING fts5(
+            text,
+            tokenize='trigram',
+            content='chunks',
+            content_rowid='id'
+        );
+
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY,
             library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
@@ -98,6 +106,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
     if columns and "lang" not in columns:
         conn.execute("ALTER TABLE chunks ADD COLUMN lang TEXT NOT NULL DEFAULT ''")
+    if not tri_existed:
+        # the trigram table was just created — backfill it for pre-v3 rows
+        conn.execute("INSERT INTO chunks_tri (rowid, text) SELECT id, text FROM chunks")
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
@@ -121,6 +132,7 @@ def delete_document_chunks(conn: sqlite3.Connection, document_id: int) -> None:
     ]
     for chunk_id in chunk_ids:
         conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (chunk_id,))
+        conn.execute("DELETE FROM chunks_tri WHERE rowid = ?", (chunk_id,))
     conn.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
 
 
@@ -145,8 +157,13 @@ def insert_chunk(
         (document_id, library_id, heading_path, ord_, text, token_est, code_ratio, lang),
     )
     chunk_id = int(cur.lastrowid)
+    normalized = fts_normalize(text)
     conn.execute(
         "INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)",
-        (chunk_id, fts_normalize(text)),
+        (chunk_id, normalized),
+    )
+    conn.execute(
+        "INSERT INTO chunks_tri (rowid, text) VALUES (?, ?)",
+        (chunk_id, normalized),
     )
     return chunk_id
