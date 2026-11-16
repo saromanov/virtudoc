@@ -2,9 +2,15 @@
 
 ## Requirements
 
-- Python 3.11 or newer (3.11–3.13 are covered by CI)
+- Python 3.11 or newer (3.11–3.14 are covered by CI)
 - Git — only for the `virtudoc fetch` command that clones remote docs
 - Any OS: Linux, macOS (Intel and Apple Silicon), Windows 10/11
+
+## From PyPI
+
+```bash
+pip install virtudoc
+```
 
 ## From source
 

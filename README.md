@@ -1,12 +1,14 @@
 # VirtuDoc
 
 [![CI](https://github.com/saromanov/virtudoc/actions/workflows/ci.yml/badge.svg)](https://github.com/saromanov/virtudoc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/virtudoc)](https://pypi.org/project/virtudoc/)
+[![Python versions](https://img.shields.io/pypi/pyversions/virtudoc)](https://pypi.org/project/virtudoc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/saromanov/virtudoc/blob/main/LICENSE)
 
 A local documentation server for AI agents. It indexes documentation from
 local directories into SQLite with FTS5 full-text search and serves relevant
-fragments to an agent through MCP tools (milestone M2). Fully offline: no
-network access happens in any mode.
+fragments to an agent through MCP tools. Fully offline: no network access
+happens in any mode.
 
 Think of it as [Upstash Context7](https://github.com/upstash/context7) running
 entirely on your machine: private and internal docs never leave your computer,
@@ -15,10 +17,11 @@ there are no API keys, request limits, or cloud dependencies.
 ## Installation
 
 ```bash
-pip install -e .
+pip install virtudoc
 ```
 
-Requires Python 3.11+. The only runtime dependency is `markdown-it-py`.
+Requires Python 3.11+. The only runtime dependencies are `markdown-it-py`
+(Markdown parsing) and the `mcp` SDK.
 
 ## Quick start
 
@@ -182,7 +185,7 @@ ruff format virtudoc tests
 Milestones M1 (core: indexing, chunking, FTS5 search, CLI) and M2 (MCP
 server over stdio/HTTP, project notes, outline mode, `.virtudocignore`) are
 done, plus `link`/`doctor` version drift warnings and the `fetch` command.
-Next: PyPI packaging and the demo screencast.
+Published on PyPI; a demo screencast is planned.
 
 ## License
 

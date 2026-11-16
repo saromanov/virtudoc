@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,24 @@ version = "0.1.0"
 description = "Local documentation server for AI agents (MCP, SQLite FTS5)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Sergey Romanov", email = "xxsmotur@gmail.com" }]
+keywords = ["mcp", "llm", "ai-agents", "documentation", "full-text-search", "sqlite", "fts5", "offline"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Text Processing :: Indexing",
+]
 dependencies = [
     "markdown-it-py>=3.0,<4",
     "mcp>=2.3,<3",
@@ -21,6 +38,12 @@ dev = [
 
 [project.scripts]
 virtudoc = "virtudoc.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/saromanov/virtudoc"
+Documentation = "https://github.com/saromanov/virtudoc/tree/main/docs"
+Source = "https://github.com/saromanov/virtudoc"
+Tracker = "https://github.com/saromanov/virtudoc/issues"
 
 [tool.setuptools.packages.find]
 include = ["virtudoc*"]
