@@ -58,3 +58,53 @@ def test_html_headings_and_code():
     assert kinds == ["heading", "para", "code"]
     assert doc.blocks[2].text == "код"
     assert doc.title == "Документация"
+
+
+def test_html_preserves_divs_lists_and_title_fallback():
+    doc = parse_html(
+        "<html><head><title>Fallback &amp; Guide</title></head><body>"
+        "<div>Intro <span>text</span></div>"
+        "<ul><li>First</li><li>Second <strong>item</strong></li></ul>"
+        "</body></html>"
+    )
+
+    assert doc.title == "Fallback & Guide"
+    assert [block.text for block in doc.blocks] == [
+        "Intro text",
+        "First",
+        "Second item",
+    ]
+
+
+def test_html_preserves_table_rows():
+    doc = parse_html(
+        "<table><tr><th>Name</th><th>Value</th></tr>"
+        "<tr><td>timeout</td><td>30 seconds</td></tr></table>"
+    )
+
+    assert [block.text for block in doc.blocks] == [
+        "Name | Value",
+        "timeout | 30 seconds",
+    ]
+
+
+def test_html_sphinx_docusaurus_content_without_boilerplate_or_duplicates():
+    doc = parse_html(
+        "<html><head><title>Ignored when h1 exists</title>"
+        "<style>.hidden { display: none; }</style></head><body>"
+        "<nav>Navigation links</nav><main><div class='theme-doc-markdown markdown'>"
+        "<h1>Guide</h1><div>Before<div><p>Nested paragraph</p></div>After</div>"
+        "<pre><code>pip install demo\ndemo run</code></pre>"
+        "<ul><li>Usage example</li></ul>"
+        "</div></main><script>alert('ignored')</script></body></html>"
+    )
+
+    assert doc.title == "Guide"
+    assert [(block.kind, block.text) for block in doc.blocks] == [
+        ("heading", "Guide"),
+        ("para", "Before"),
+        ("para", "Nested paragraph"),
+        ("para", "After"),
+        ("code", "pip install demo\ndemo run"),
+        ("para", "Usage example"),
+    ]
