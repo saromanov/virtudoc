@@ -89,6 +89,53 @@ def test_fetch_download_size_cap(home, tmp_path, monkeypatch):
     assert not (home / "fetch" / "capped").exists()
 
 
+def test_fetch_extract_size_cap_preserves_existing_cache(home, tmp_path):
+    archive = _docs_zip(tmp_path)
+    dest = cache_path("extract-cap")
+    dest.mkdir(parents=True)
+    (dest / "old.md").write_text("# Keep me\n", encoding="utf-8")
+
+    with pytest.raises(FetchError, match="extracted-size limit"):
+        fetch_source(archive.as_uri(), "extract-cap", max_extract_bytes=16)
+
+    assert (dest / "old.md").read_text(encoding="utf-8") == "# Keep me\n"
+    assert not list(dest.parent.glob(".extract-cap.download-*"))
+    assert not list(dest.parent.glob(".extract-cap.backup-*"))
+
+
+def test_fetch_extract_file_count_cap(home, tmp_path):
+    archive = _docs_zip(tmp_path)
+    with pytest.raises(FetchError, match="file-count limit"):
+        fetch_source(archive.as_uri(), "too-many", max_extract_files=1)
+    assert not cache_path("too-many").exists()
+
+
+def test_fetch_archive_success_replaces_old_cache(home, tmp_path):
+    archive = _docs_zip(tmp_path)
+    dest = cache_path("archive-replace")
+    dest.mkdir(parents=True)
+    (dest / "old.md").write_text("# Remove me\n", encoding="utf-8")
+
+    fetch_source(archive.as_uri(), "archive-replace")
+
+    assert not (dest / "old.md").exists()
+    assert (dest / "index.md").is_file()
+
+
+@pytest.mark.parametrize("link_type", [tarfile.SYMTYPE, tarfile.LNKTYPE])
+def test_fetch_rejects_tar_links(home, tmp_path, link_type):
+    archive = tmp_path / f"link-{link_type.decode()}.tar"
+    with tarfile.open(archive, "w") as tf:
+        info = tarfile.TarInfo("docs-repo/passwd")
+        info.type = link_type
+        info.linkname = "/etc/passwd"
+        tf.addfile(info)
+
+    with pytest.raises(FetchError, match="unsafe member"):
+        fetch_source(archive.as_uri(), "tar-link")
+    assert not cache_path("tar-link").exists()
+
+
 def test_fetch_git_timeout_is_clean_error(home, monkeypatch, capsys):
     if shutil.which("git") is None:
         pytest.skip("git not available")
