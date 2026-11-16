@@ -14,7 +14,7 @@ from .indexer.indexer import (
     IndexLockError,
     LibraryExistsError,
     LibraryNotFoundError,
-    add_library,
+    add_and_index_library,
     delete_library,
     get_library,
     index_library,
@@ -48,15 +48,15 @@ def _print_skipped(skipped_files: list[str]) -> None:
 def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
     with _open(cfg) as conn:
         try:
-            lib_id = add_library(
+            lib_id, stats = add_and_index_library(
                 conn,
                 Path(args.path),
                 args.name,
+                chunker=_chunker_from_config(cfg),
                 version=args.version,
                 description=args.description,
                 replace=args.replace,
             )
-            stats = index_library(conn, lib_id, _chunker_from_config(cfg))
         except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -338,15 +338,15 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
         return 1
     with _open(cfg) as conn:
         try:
-            lib_id = add_library(
+            lib_id, stats = add_and_index_library(
                 conn,
                 source,
                 args.name,
+                chunker=_chunker_from_config(cfg),
                 version=args.version,
                 description=args.repo,
                 replace=args.replace,
             )
-            stats = index_library(conn, lib_id, _chunker_from_config(cfg))
         except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -408,14 +408,14 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
                 failed += 1
                 continue
             try:
-                lib_id = add_library(
+                lib_id, stats = add_and_index_library(
                     conn,
                     Path(str(source)),
                     name,
+                    chunker=chunker,
                     version=str(lib["version"]) if lib.get("version") else None,
                     replace=True,
                 )
-                stats = index_library(conn, lib_id, chunker)
             except (LibraryExistsError, ValueError, OSError, IndexLockError) as exc:
                 print(f"error: {name}: {exc}", file=sys.stderr)
                 failed += 1
