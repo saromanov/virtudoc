@@ -174,65 +174,169 @@ def parse_text(text: str) -> ParsedDocument:
     return ParsedDocument(blocks=blocks)
 
 
-class _HtmlDocsParser(HTMLParser):
-    _HEADINGS: ClassVar[dict[str, int]] = {
-        "h1": 1,
-        "h2": 2,
-        "h3": 3,
-        "h4": 4,
-        "h5": 5,
-        "h6": 6,
+@dataclass
+class _HtmlNode:
+    tag: str
+    children: list[_HtmlNode | str] = field(default_factory=list)
+
+
+class _HtmlTreeParser(HTMLParser):
+    _VOID: ClassVar[set[str]] = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
     }
-    _SKIP: ClassVar[set[str]] = {"script", "style", "nav", "footer", "header"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.blocks: list[Block] = []
-        self.title: str | None = None
-        self._stack: list[str] = []
-        self._buf: list[str] = []
-        self._skip_depth = 0
+        self.root = _HtmlNode("")
+        self._stack = [self.root]
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in self._SKIP:
-            self._skip_depth += 1
-            return
-        if self._skip_depth:
-            return
-        if tag in self._HEADINGS or tag in ("p", "pre"):
-            self._stack.append(tag)
-            self._buf = []
+        node = _HtmlNode(tag)
+        self._stack[-1].children.append(node)
+        if tag not in self._VOID:
+            self._stack.append(node)
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self._stack[-1].children.append(_HtmlNode(tag))
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in self._SKIP and self._skip_depth:
-            self._skip_depth -= 1
-            return
-        if self._skip_depth or not self._stack or self._stack[-1] != tag:
-            return
-        self._stack.pop()
-        text = re.sub(r"\s+", " ", "".join(self._buf)).strip()
-        if not text:
-            return
-        if tag in self._HEADINGS:
-            level = self._HEADINGS[tag]
-            blocks_append = Block("heading", text, level=level)
-            self.blocks.append(blocks_append)
-            if level == 1 and self.title is None:
-                self.title = text
-        elif tag == "pre":
-            self.blocks.append(Block("code", text))
-        else:
-            self.blocks.append(Block("para", text))
+        for index in range(len(self._stack) - 1, 0, -1):
+            if self._stack[index].tag == tag:
+                del self._stack[index:]
+                break
 
     def handle_data(self, data: str) -> None:
-        if not self._skip_depth and self._stack:
-            self._buf.append(data)
+        self._stack[-1].children.append(data)
+
+
+_HTML_HEADINGS = {f"h{level}": level for level in range(1, 7)}
+_HTML_SKIP = {"head", "script", "style", "nav", "footer", "header"}
+_HTML_CONTAINERS = {
+    "html",
+    "body",
+    "main",
+    "article",
+    "section",
+    "div",
+    "ul",
+    "ol",
+    "dl",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "blockquote",
+}
+_HTML_TEXT_BLOCKS = {"p", "li", "dt", "dd", "tr", "figcaption"}
+
+
+def _html_text(node: _HtmlNode, *, preserve: bool = False) -> str:
+    parts: list[str] = []
+
+    def collect(current: _HtmlNode) -> None:
+        for child in current.children:
+            if isinstance(child, str):
+                parts.append(child)
+            elif child.tag == "br":
+                parts.append("\n" if preserve else " ")
+            elif child.tag not in _HTML_SKIP:
+                collect(child)
+
+    collect(node)
+    text = "".join(parts)
+    if preserve:
+        return text.strip("\r\n")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _html_title(node: _HtmlNode) -> str | None:
+    if node.tag == "title":
+        return _html_text(node) or None
+    for child in node.children:
+        if isinstance(child, _HtmlNode):
+            title = _html_title(child)
+            if title:
+                return title
+    return None
+
+
+def _html_row_text(row: _HtmlNode) -> str:
+    cells = [
+        child
+        for child in row.children
+        if isinstance(child, _HtmlNode) and child.tag in ("th", "td")
+    ]
+    if not cells:
+        return _html_text(row)
+    return " | ".join(filter(None, (_html_text(cell) for cell in cells)))
 
 
 def parse_html(text: str) -> ParsedDocument:
-    parser = _HtmlDocsParser()
+    parser = _HtmlTreeParser()
     parser.feed(text)
-    return ParsedDocument(blocks=parser.blocks, title=parser.title)
+    parser.close()
+    blocks: list[Block] = []
+    title: str | None = None
+
+    def walk(node: _HtmlNode) -> None:
+        nonlocal title
+        inline: list[str] = []
+
+        def flush_inline() -> None:
+            text = re.sub(r"\s+", " ", "".join(inline)).strip()
+            if text:
+                blocks.append(Block("para", text))
+            inline.clear()
+
+        for child in node.children:
+            if isinstance(child, str):
+                inline.append(child)
+                continue
+            tag = child.tag
+            if tag in _HTML_SKIP:
+                continue
+            if tag in _HTML_HEADINGS:
+                flush_inline()
+                heading = _html_text(child)
+                if heading:
+                    level = _HTML_HEADINGS[tag]
+                    blocks.append(Block("heading", heading, level=level))
+                    if level == 1 and title is None:
+                        title = heading
+            elif tag == "pre":
+                flush_inline()
+                code = _html_text(child, preserve=True)
+                if code.strip():
+                    blocks.append(Block("code", code))
+            elif tag in _HTML_TEXT_BLOCKS:
+                flush_inline()
+                value = _html_row_text(child) if tag == "tr" else _html_text(child)
+                if value:
+                    blocks.append(Block("para", value))
+            elif tag in _HTML_CONTAINERS:
+                flush_inline()
+                walk(child)
+            elif tag == "br":
+                inline.append(" ")
+            else:
+                inline.append(f" {_html_text(child)} ")
+        flush_inline()
+
+    walk(parser.root)
+    return ParsedDocument(blocks=blocks, title=title or _html_title(parser.root))
 
 
 def parse_file(path, text: str) -> ParsedDocument:

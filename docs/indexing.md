@@ -7,7 +7,7 @@
 | Markdown | `.md`, `.mdx` | Primary format; structure via markdown-it-py, original text preserved |
 | reStructuredText | `.rst` | Simplified parser: headings, paragraphs, directives |
 | Plain text | `.txt` | Paragraphs split on blank lines |
-| HTML | `.html`, `.htm` | Best-effort extraction of headings, paragraphs, code blocks |
+| HTML | `.html`, `.htm` | Best-effort extraction of headings, paragraphs, lists, tables, code blocks, and title metadata |
 
 A parse error in one file never stops indexing: the file is logged, counted
 in the error summary and the rest is processed.
