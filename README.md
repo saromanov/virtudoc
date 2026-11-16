@@ -10,9 +10,8 @@ local directories into SQLite with FTS5 full-text search and serves relevant
 fragments to an agent through MCP tools. Fully offline: no network access
 happens in any mode.
 
-Think of it as [Upstash Context7](https://github.com/upstash/context7) running
-entirely on your machine: private and internal docs never leave your computer,
-there are no API keys, request limits, or cloud dependencies.
+Private and internal docs never leave your computer: there are no API keys,
+request limits, or cloud dependencies.
 
 ## Installation
 
