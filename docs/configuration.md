@@ -34,6 +34,7 @@ max_tokens = 800                   # budget for the project notes block
 transport = "stdio"                # MCP transport: stdio or http
 http_host = "127.0.0.1"
 http_port = 8765
+http_token = "change-me"             # bearer token; required off loopback
 
 [log]
 level = "INFO"                     # DEBUG, INFO, WARNING, ERROR
@@ -63,3 +64,5 @@ another indexing process shares the data directory.
   Handy for experiments; remember that agents spawn `serve` with a default
   environment, so they use the default directory unless you set `env` in
   the MCP server config.
+- `VIRTUDOC_HTTP_TOKEN` — bearer token override for streamable HTTP. It takes
+  precedence over `server.http_token` and is required for non-loopback hosts.

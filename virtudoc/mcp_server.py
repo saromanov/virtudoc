@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
+import os
+import secrets
 import sqlite3
 import sys
 from contextlib import closing
@@ -216,18 +219,86 @@ def reindex_before_serve(config: Config) -> None:
                 logger.info("reindexed %s on serve start: %s", row["id"], stats.summary())
 
 
+class BearerAuthMiddleware:
+    def __init__(self, app, token: str) -> None:
+        self.app = app
+        self.expected = b"Bearer " + token.encode("utf-8")
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        authorization = headers.get(b"authorization", b"")
+        if not secrets.compare_digest(authorization, self.expected):
+            body = b'{"error":"unauthorized"}'
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode("ascii")),
+                        (b"www-authenticate", b"Bearer"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _configured_http_token(config: Config) -> str | None:
+    token = os.environ.get("VIRTUDOC_HTTP_TOKEN") or config.values.get("server.http_token")
+    return str(token).strip() if token and str(token).strip() else None
+
+
+def _run_http(server: MCPServer, *, host: str, port: int, token: str | None) -> None:
+    import uvicorn
+
+    async def serve() -> None:
+        app = server.streamable_http_app(host=host)
+        if token is not None:
+            app = BearerAuthMiddleware(app, token)
+        uvicorn_config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level=server.settings.log_level.lower(),
+        )
+        await uvicorn.Server(uvicorn_config).serve()
+
+    anyio.run(serve)
+
+
 def run_serve(config: Config, *, http: bool | int = False) -> int:
     print(
         f"virtudoc serve: data directory {data_dir()} (set VIRTUDOC_HOME to override)",
         file=sys.stderr,
     )
+    host = config.get_str("server.http_host")
+    token = _configured_http_token(config)
+    if http and not _is_loopback_host(host) and token is None:
+        print(
+            "error: non-loopback HTTP requires server.http_token or VIRTUDOC_HTTP_TOKEN",
+            file=sys.stderr,
+        )
+        return 1
     reindex_before_serve(config)
     server = build_server(config)
     if http:
         port = config.get_int("server.http_port") if http is True else int(http)
-        host = config.get_str("server.http_host")
         logger.info("starting streamable HTTP transport on %s:%s", host, port)
-        server.run(transport="streamable-http", host=host, port=port)
+        _run_http(server, host=host, port=port, token=token)
     else:
         logger.info("starting stdio transport")
         anyio.run(server.run_stdio_async)

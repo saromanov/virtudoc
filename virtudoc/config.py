@@ -23,6 +23,7 @@ DEFAULTS: dict[str, dict[str, object]] = {
         "transport": "stdio",
         "http_host": "127.0.0.1",
         "http_port": 8765,
+        "http_token": None,
     },
     "log": {"level": "INFO"},
 }
