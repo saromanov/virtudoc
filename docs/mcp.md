@@ -78,9 +78,8 @@ rule below to the project's `AGENTS.md` / `CLAUDE.md` instead.
 
 ## Tools
 
-The tool names are unique to virtudoc: they do not collide with
-[Context7](https://github.com/upstash/context7) tools, so an agent
-connected to both servers can always tell which one to call.
+The tool names are unique to virtudoc, so an agent connected to other
+documentation servers can always tell which one to call.
 
 ### find-library
 

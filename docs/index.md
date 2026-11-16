@@ -6,9 +6,7 @@ database with FTS5 full-text search, and serves relevant fragments to an
 agent through MCP tools. Everything runs on your machine: no API keys, no
 cloud, no request limits.
 
-Think of it as [Upstash Context7](https://github.com/upstash/context7) that
-runs entirely on your machine — with one important difference: private and
-internal documentation never leaves your computer.
+Private and internal documentation never leaves your computer.
 
 ## What it gives an agent
 
