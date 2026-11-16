@@ -11,6 +11,8 @@ path = "~/.virtudoc/index.db"      # database location
 
 [fetch]
 branch = "main"                    # git branch for `fetch` (unset = repo default)
+max_extract_bytes = 2147483648      # expanded archive size limit (2 GiB)
+max_extract_files = 100000         # maximum number of files per archive
 
 [chunk]
 target_tokens = 600                # target chunk size

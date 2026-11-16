@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -19,6 +21,10 @@ GIT_TIMEOUT = 300
 
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 
+MAX_EXTRACT_BYTES = 2 * 1024 * 1024 * 1024
+
+MAX_EXTRACT_FILES = 100_000
+
 _DOWNLOAD_CHUNK = 1024 * 1024
 
 PIN_FILE = ".virtudoc-fetch.json"
@@ -32,7 +38,14 @@ def cache_path(name: str) -> Path:
     return data_dir() / "fetch" / name
 
 
-def fetch_source(repo_url: str, name: str, branch: str | None = None) -> Path:
+def fetch_source(
+    repo_url: str,
+    name: str,
+    branch: str | None = None,
+    *,
+    max_extract_bytes: int | None = None,
+    max_extract_files: int | None = None,
+) -> Path:
     """Download or clone repo_url into the local fetch cache and return the path.
 
     This is the only command allowed to touch the network (NFR-01).
@@ -42,83 +55,204 @@ def fetch_source(repo_url: str, name: str, branch: str | None = None) -> Path:
     validate_name(name)
     dest = cache_path(name)
     lower = repo_url.lower().split("?", 1)[0]
-    if lower.endswith(".zip"):
-        _fetch_archive(repo_url, dest, kind="zip")
-    elif lower.endswith((".tar.gz", ".tgz", ".tar")):
-        _fetch_archive(repo_url, dest, kind="tar")
+    if lower.endswith((".zip", ".tar.gz", ".tgz", ".tar")):
+        max_extract_bytes = (
+            MAX_EXTRACT_BYTES if max_extract_bytes is None else max_extract_bytes
+        )
+        max_extract_files = (
+            MAX_EXTRACT_FILES if max_extract_files is None else max_extract_files
+        )
+        if max_extract_bytes <= 0 or max_extract_files <= 0:
+            raise ValueError("archive extraction limits must be positive")
+        kind = "zip" if lower.endswith(".zip") else "tar"
+        _fetch_archive(
+            repo_url,
+            dest,
+            kind=kind,
+            max_extract_bytes=max_extract_bytes,
+            max_extract_files=max_extract_files,
+        )
     else:
         _fetch_git(repo_url, dest, branch)
     return dest
 
 
-def _read_capped(response, cap: int) -> bytes:
-    parts: list[bytes] = []
+def _download_capped(response, dest: Path, cap: int) -> None:
     total = 0
-    while True:
-        chunk = response.read(_DOWNLOAD_CHUNK)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > cap:
-            raise FetchError(f"download exceeds the size limit of {cap} bytes")
-        parts.append(chunk)
-    return b"".join(parts)
+    with dest.open("wb") as output:
+        while True:
+            chunk = response.read(_DOWNLOAD_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > cap:
+                raise FetchError(f"download exceeds the size limit of {cap} bytes")
+            output.write(chunk)
 
 
-def _fetch_archive(url: str, dest: Path, *, kind: str) -> None:
+def _fetch_archive(
+    url: str,
+    dest: Path,
+    *,
+    kind: str,
+    max_extract_bytes: int,
+    max_extract_files: int,
+) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        shutil.rmtree(dest)
-    tmp = dest.with_suffix(dest.suffix + ".download")
-    if tmp.exists():
-        shutil.rmtree(tmp) if tmp.is_dir() else tmp.unlink()
-    tmp.mkdir(parents=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".{dest.name}.download-", dir=dest.parent))
     archive_file = tmp / f"archive.{kind}"
     try:
-        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
-            archive_file.write_bytes(_read_capped(response, MAX_DOWNLOAD_BYTES))
-    except (OSError, ValueError, FetchError) as exc:
-        shutil.rmtree(tmp, ignore_errors=True)
-        if isinstance(exc, FetchError):
+        try:
+            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response:
+                _download_capped(response, archive_file, MAX_DOWNLOAD_BYTES)
+        except FetchError:
             raise
-        raise FetchError(f"failed to download {url}: {exc}") from exc
-    try:
-        if kind == "zip":
-            with zipfile.ZipFile(archive_file) as zf:
-                _safe_extract_zip(zf, tmp / "extracted")
-        else:
-            with tarfile.open(archive_file) as tf:
-                _safe_extract_tar(tf, tmp / "extracted")
-    except (zipfile.BadZipFile, tarfile.TarError) as exc:
+        except (OSError, ValueError) as exc:
+            raise FetchError(f"failed to download {url}: {exc}") from exc
+        try:
+            if kind == "zip":
+                with zipfile.ZipFile(archive_file) as zf:
+                    _safe_extract_zip(
+                        zf,
+                        tmp / "extracted",
+                        max_extract_bytes=max_extract_bytes,
+                        max_extract_files=max_extract_files,
+                    )
+            else:
+                with tarfile.open(archive_file) as tf:
+                    _safe_extract_tar(
+                        tf,
+                        tmp / "extracted",
+                        max_extract_bytes=max_extract_bytes,
+                        max_extract_files=max_extract_files,
+                    )
+        except FetchError:
+            raise
+        except (zipfile.BadZipFile, tarfile.TarError, OSError, RuntimeError) as exc:
+            raise FetchError(f"failed to extract archive: {exc}") from exc
+        _replace_cache(_single_root(tmp / "extracted"), dest)
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise FetchError(f"failed to extract archive: {exc}") from exc
-    root = _single_root(tmp / "extracted")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(root), str(dest))
-    shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
+def _check_archive_limits(size: int, files: int, max_bytes: int, max_files: int) -> None:
+    if files > max_files:
+        raise FetchError(f"archive exceeds the file-count limit of {max_files}")
+    if size > max_bytes:
+        raise FetchError(f"archive exceeds the extracted-size limit of {max_bytes} bytes")
+
+
+def _member_target(dest: Path, name: str) -> Path:
     base = dest.resolve()
-    for member in zf.infolist():
-        if (member.external_attr >> 16) & 0o170000 == 0o120000:  # symlink mode bits
-            raise FetchError(f"unsafe path in archive: {member.filename!r}")
-        target = (dest / member.filename).resolve()
-        if not str(target).startswith(str(base) + "/"):
-            raise FetchError(f"unsafe path in archive: {member.filename!r}")
-    zf.extractall(dest)
+    target = (dest / name).resolve()
+    if target == base or base not in target.parents:
+        raise FetchError(f"unsafe path in archive: {name!r}")
+    return target
 
 
-def _safe_extract_tar(tf: tarfile.TarFile, dest: Path) -> None:
-    base = dest.resolve()
-    for member in tf.getmembers():
-        target = (dest / member.name).resolve()
-        if not str(target).startswith(str(base) + "/"):
-            raise FetchError(f"unsafe path in archive: {member.name!r}")
+def _copy_member(source, target: Path, total: int, max_bytes: int) -> int:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("xb") as output:
+        while True:
+            chunk = source.read(_DOWNLOAD_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            _check_archive_limits(total, 0, max_bytes, 0)
+            output.write(chunk)
+    return total
+
+
+def _safe_extract_zip(
+    zf: zipfile.ZipFile,
+    dest: Path,
+    *,
+    max_extract_bytes: int = MAX_EXTRACT_BYTES,
+    max_extract_files: int = MAX_EXTRACT_FILES,
+) -> None:
+    members = zf.infolist()
+    total = 0
+    files = 0
+    for member in members:
+        if (member.external_attr >> 16) & 0o170000 == 0o120000:
+            raise FetchError(f"unsafe path in archive: {member.filename!r}")
+        _member_target(dest, member.filename)
+        if not member.is_dir():
+            files += 1
+            total += member.file_size
+            _check_archive_limits(total, files, max_extract_bytes, max_extract_files)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    total = 0
+    files = 0
+    for member in members:
+        target = _member_target(dest, member.filename)
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        files += 1
+        _check_archive_limits(total, files, max_extract_bytes, max_extract_files)
+        with zf.open(member) as source:
+            total = _copy_member(source, target, total, max_extract_bytes)
+
+
+def _safe_extract_tar(
+    tf: tarfile.TarFile,
+    dest: Path,
+    *,
+    max_extract_bytes: int = MAX_EXTRACT_BYTES,
+    max_extract_files: int = MAX_EXTRACT_FILES,
+) -> None:
+    members = tf.getmembers()
+    total = 0
+    files = 0
+    for member in members:
+        if not member.isfile() and not member.isdir():
+            raise FetchError(f"unsafe member in archive: {member.name!r}")
+        _member_target(dest, member.name)
+        if member.isfile():
+            files += 1
+            total += member.size
+            _check_archive_limits(total, files, max_extract_bytes, max_extract_files)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    total = 0
+    files = 0
+    for member in members:
+        target = _member_target(dest, member.name)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        files += 1
+        _check_archive_limits(total, files, max_extract_bytes, max_extract_files)
+        source = tf.extractfile(member)
+        if source is None:
+            raise FetchError(f"cannot extract archive member: {member.name!r}")
+        with source:
+            total = _copy_member(source, target, total, max_extract_bytes)
+
+
+def _replace_cache(root: Path, dest: Path) -> None:
+    backup_parent: Path | None = None
+    backup: Path | None = None
+    succeeded = False
     try:
-        tf.extractall(dest, filter="data")  # Python 3.12+
-    except TypeError:  # Python 3.11: member checks above are the safeguard
-        tf.extractall(dest)
+        if dest.exists():
+            backup_parent = Path(
+                tempfile.mkdtemp(prefix=f".{dest.name}.backup-", dir=dest.parent)
+            )
+            backup = backup_parent / "cache"
+            os.replace(dest, backup)
+        try:
+            os.replace(root, dest)
+        except Exception:
+            if backup is not None:
+                os.replace(backup, dest)
+            raise
+        succeeded = True
+    finally:
+        if backup_parent is not None and (succeeded or not backup.exists()):
+            shutil.rmtree(backup_parent, ignore_errors=True)
 
 
 def _single_root(extracted: Path) -> Path:

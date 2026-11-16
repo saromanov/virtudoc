@@ -332,7 +332,13 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     configured_branch = cfg.values.get("fetch.branch")
     branch = args.branch or (str(configured_branch) if configured_branch else None)
     try:
-        source = fetch_source(args.repo, args.name, branch=branch)
+        source = fetch_source(
+            args.repo,
+            args.name,
+            branch=branch,
+            max_extract_bytes=cfg.get_int("fetch.max_extract_bytes"),
+            max_extract_files=cfg.get_int("fetch.max_extract_files"),
+        )
     except (FetchError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

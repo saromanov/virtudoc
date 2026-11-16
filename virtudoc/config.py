@@ -10,7 +10,11 @@ DATA_DIR_ENV = "VIRTUDOC_HOME"
 
 DEFAULTS: dict[str, dict[str, object]] = {
     "db": {"path": None},
-    "fetch": {"branch": None},
+    "fetch": {
+        "branch": None,
+        "max_extract_bytes": 2 * 1024 * 1024 * 1024,
+        "max_extract_files": 100_000,
+    },
     "chunk": {"target_tokens": 600, "max_tokens": 1200, "overlap_tokens": 60},
     "index": {"auto_refresh": True},
     "search": {"default_tokens": 5000, "max_results": 20, "snippet_window_tokens": 400},
