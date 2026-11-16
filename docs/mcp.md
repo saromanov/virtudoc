@@ -62,6 +62,24 @@ claude mcp add virtudoc --scope user -- virtudoc serve
 Agents spawn the server with a default environment, so the data directory
 is `~/.virtudoc`. Add an `env` block with `VIRTUDOC_HOME` to override.
 
+## Streamable HTTP and authentication
+
+`virtudoc serve --http` listens on `127.0.0.1:8765` by default. Binding to a
+non-loopback host requires an explicit bearer token:
+
+```toml
+# ~/.virtudoc/config.toml
+[server]
+http_host = "0.0.0.0"
+http_token = "use-a-long-random-secret"
+```
+
+`VIRTUDOC_HTTP_TOKEN` overrides the config value. The server refuses to start
+on a non-loopback host without either setting. HTTP clients must send
+`Authorization: Bearer <token>` on every request; missing or invalid tokens
+receive `401 Unauthorized`. If a token is configured on loopback, it is also
+enforced there.
+
 ## CLI + skill mode (no MCP setup)
 
 If the agent can run shell commands, skip the MCP configuration entirely.

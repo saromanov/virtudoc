@@ -303,3 +303,81 @@ async def test_mcp_refreshes_stale_library_on_tool_call(home, docs_dir):
     payload = _payload(after)
     assert payload["snippets"]
     assert payload["snippets"][0]["source"] == "fresh-late.md"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("authorization", "expected_status"),
+    [
+        (None, 401),
+        (b"Bearer wrong", 401),
+        (b"Bearer secret", 204),
+    ],
+)
+async def test_http_bearer_authentication(authorization, expected_status):
+    from virtudoc.mcp_server import BearerAuthMiddleware
+
+    called = False
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called = True
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    headers = [] if authorization is None else [(b"authorization", authorization)]
+    app = BearerAuthMiddleware(downstream, "secret")
+    await app({"type": "http", "headers": headers}, receive, send)
+
+    assert messages[0]["status"] == expected_status
+    assert called is (expected_status == 204)
+    if expected_status == 401:
+        assert (b"www-authenticate", b"Bearer") in messages[0]["headers"]
+
+
+def test_non_loopback_http_requires_token(home, monkeypatch, capsys):
+    import virtudoc.mcp_server as mcp_server_module
+
+    monkeypatch.delenv("VIRTUDOC_HTTP_TOKEN", raising=False)
+    config = Config()
+    config.values["server.http_host"] = "0.0.0.0"
+
+    assert mcp_server_module.run_serve(config, http=True) == 1
+    assert "non-loopback HTTP requires" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("host", "token", "expected_token"),
+    [
+        ("127.0.0.1", None, None),
+        ("0.0.0.0", "secret", "secret"),
+    ],
+)
+def test_http_authentication_configuration(
+    home, monkeypatch, host, token, expected_token
+):
+    import virtudoc.mcp_server as mcp_server_module
+
+    monkeypatch.delenv("VIRTUDOC_HTTP_TOKEN", raising=False)
+    monkeypatch.setattr(mcp_server_module, "reindex_before_serve", lambda config: None)
+    monkeypatch.setattr(mcp_server_module, "build_server", lambda config: object())
+    captured = {}
+
+    def fake_run_http(server, *, host, port, token):
+        captured.update(host=host, port=port, token=token)
+
+    monkeypatch.setattr(mcp_server_module, "_run_http", fake_run_http)
+    config = Config()
+    config.values["server.http_host"] = host
+    config.values["server.http_token"] = token
+
+    assert mcp_server_module.run_serve(config, http=9000) == 0
+    assert captured == {"host": host, "port": 9000, "token": expected_token}
