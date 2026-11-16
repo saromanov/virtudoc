@@ -39,7 +39,7 @@ def test_add_reports_lock_error(home, tmp_path, capsys, monkeypatch):
     def locked(*args, **kwargs):
         raise IndexLockError("failed to acquire the index lock")
 
-    monkeypatch.setattr(cli_module, "index_library", locked)
+    monkeypatch.setattr(cli_module, "add_and_index_library", locked)
     docs = tmp_path / "lockdocs"
     docs.mkdir()
     (docs / "a.md").write_text("# A\n\nТекст.\n", encoding="utf-8")
@@ -54,7 +54,7 @@ def test_import_reports_lock_error(home, docs_dir, tmp_path, capsys, monkeypatch
     def locked(*args, **kwargs):
         raise IndexLockError("locked")
 
-    monkeypatch.setattr(cli_module, "index_library", locked)
+    monkeypatch.setattr(cli_module, "add_and_index_library", locked)
     setup = tmp_path / "setup.toml"
     setup.write_text(f'[[libraries]]\nname = "demo"\npath = "{docs_dir}"\n', encoding="utf-8")
     assert main(["import", str(setup)]) == 1
@@ -215,6 +215,12 @@ def test_export_import_roundtrip(home, docs_dir, tmp_path, capsys):
 def test_import_is_idempotent(home, docs_dir, tmp_path, capsys):
     main(["add", str(docs_dir), "--name", "demo"])
     capsys.readouterr()
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+    from virtudoc.notes import add_note, list_notes
+
+    with open_db(Config().db_path) as conn:
+        add_note(conn, "local/demo", "Preserve across imports")
     setup = tmp_path / "setup.toml"
     main(["export", str(setup)])
     capsys.readouterr()
@@ -225,6 +231,10 @@ def test_import_is_idempotent(home, docs_dir, tmp_path, capsys):
     assert main(["list"]) == 0
     out = capsys.readouterr().out
     assert out.count("local/demo") == 1
+    with open_db(Config().db_path) as conn:
+        assert [note.text for note in list_notes(conn, "local/demo")] == [
+            "Preserve across imports"
+        ]
 
 
 def test_import_missing_source_fails_cleanly(home, tmp_path, capsys):

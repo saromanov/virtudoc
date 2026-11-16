@@ -59,7 +59,7 @@ def validate_name(name: str) -> None:
         )
 
 
-def add_library(
+def _write_library(
     conn: sqlite3.Connection,
     source: Path,
     name: str,
@@ -78,16 +78,45 @@ def add_library(
         raise LibraryExistsError(f"library '{lib_id}' already exists; use --replace to overwrite")
     now = utc_now()
     if row:
-        delete_library(conn, name)
-    conn.execute(
-        """
-        INSERT INTO libraries (id, name, source_path, description, version, added_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (lib_id, name, str(source), description, version, now, now),
+        conn.execute(
+            """
+            UPDATE libraries
+            SET source_path = ?, description = ?, version = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (str(source), description, version, now, lib_id),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO libraries
+                (id, name, source_path, description, version, added_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (lib_id, name, str(source), description, version, now, now),
+        )
+    logger.info("registered library %s (%s)", lib_id, source)
+    return lib_id
+
+
+def add_library(
+    conn: sqlite3.Connection,
+    source: Path,
+    name: str,
+    *,
+    version: str | None = None,
+    description: str | None = None,
+    replace: bool = False,
+) -> str:
+    lib_id = _write_library(
+        conn,
+        source,
+        name,
+        version=version,
+        description=description,
+        replace=replace,
     )
     conn.commit()
-    logger.info("registered library %s (%s)", lib_id, source)
     return lib_id
 
 
@@ -127,7 +156,16 @@ def list_libraries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def index_library(
+def _begin_index(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as exc:
+        raise IndexLockError(
+            "failed to acquire the index lock: another indexing run may be in progress"
+        ) from exc
+
+
+def _index_library(
     conn: sqlite3.Connection,
     lib_id: str,
     chunker: Chunker,
@@ -145,87 +183,118 @@ def index_library(
     for rel_path in walked.skipped_large:
         logger.warning("file over 5 MB, skipped: %s", rel_path)
 
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as exc:
-        raise IndexLockError(
-            "failed to acquire the index lock: another indexing run may be in progress"
-        ) from exc
-
-    try:
-        seen: set[str] = set()
-        for walked_file in walked.files:
-            stats.processed += 1
-            rel_path = walked_file.rel_path
-            seen.add(rel_path)
-            try:
-                content = walked_file.path.read_bytes()
-            except OSError as exc:
-                stats.errors += 1
-                logger.error("failed to read %s: %s", rel_path, exc)
-                continue
-            digest = hashlib.sha1(content).hexdigest()
-            doc_row = conn.execute(
-                "SELECT id, content_hash FROM documents WHERE library_id = ? AND rel_path = ?",
-                (lib_id, rel_path),
-            ).fetchone()
-            if doc_row and doc_row["content_hash"] == digest:
-                stats.skipped += 1
-                continue
-            try:
-                text = content.decode("utf-8", errors="replace")
-                parsed = parse_file(walked_file.path, text)
-                chunks = chunker.chunk(parsed)
-            except (ParseError, ValueError, UnicodeError) as exc:
-                stats.errors += 1
-                logger.error("parse error in %s: %s", rel_path, exc)
-                continue
-            if doc_row:
-                delete_document_chunks(conn, doc_row["id"])
-            now = utc_now()
-            cur = conn.execute(
-                """
-                INSERT INTO documents (library_id, rel_path, title, content_hash, indexed_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (library_id, rel_path)
-                DO UPDATE SET title = excluded.title, content_hash = excluded.content_hash,
-                              indexed_at = excluded.indexed_at
-                RETURNING id
-                """,
-                (lib_id, rel_path, parsed.title, digest, now),
+    seen: set[str] = set()
+    for walked_file in walked.files:
+        stats.processed += 1
+        rel_path = walked_file.rel_path
+        seen.add(rel_path)
+        try:
+            content = walked_file.path.read_bytes()
+        except OSError as exc:
+            stats.errors += 1
+            logger.error("failed to read %s: %s", rel_path, exc)
+            continue
+        digest = hashlib.sha1(content).hexdigest()
+        doc_row = conn.execute(
+            "SELECT id, content_hash FROM documents WHERE library_id = ? AND rel_path = ?",
+            (lib_id, rel_path),
+        ).fetchone()
+        if doc_row and doc_row["content_hash"] == digest:
+            stats.skipped += 1
+            continue
+        try:
+            text = content.decode("utf-8", errors="replace")
+            parsed = parse_file(walked_file.path, text)
+            chunks = chunker.chunk(parsed)
+        except (ParseError, ValueError, UnicodeError) as exc:
+            stats.errors += 1
+            logger.error("parse error in %s: %s", rel_path, exc)
+            continue
+        if doc_row:
+            delete_document_chunks(conn, doc_row["id"])
+        now = utc_now()
+        cur = conn.execute(
+            """
+            INSERT INTO documents (library_id, rel_path, title, content_hash, indexed_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (library_id, rel_path)
+            DO UPDATE SET title = excluded.title, content_hash = excluded.content_hash,
+                          indexed_at = excluded.indexed_at
+            RETURNING id
+            """,
+            (lib_id, rel_path, parsed.title, digest, now),
+        )
+        document_id = int(cur.fetchone()[0])
+        for chunk in chunks:
+            insert_chunk(
+                conn,
+                document_id=document_id,
+                library_id=lib_id,
+                heading_path=chunk.heading_path,
+                ord_=chunk.ord,
+                text=chunk.text,
+                token_est=chunk.token_est,
+                code_ratio=chunk.code_ratio,
+                lang=chunk.lang,
             )
-            document_id = int(cur.fetchone()[0])
-            for chunk in chunks:
-                insert_chunk(
-                    conn,
-                    document_id=document_id,
-                    library_id=lib_id,
-                    heading_path=chunk.heading_path,
-                    ord_=chunk.ord,
-                    text=chunk.text,
-                    token_est=chunk.token_est,
-                    code_ratio=chunk.code_ratio,
-                    lang=chunk.lang,
-                )
-            stats.changed += 1
-            logger.debug("indexed %s: %d chunks", rel_path, len(chunks))
+        stats.changed += 1
+        logger.debug("indexed %s: %d chunks", rel_path, len(chunks))
 
-        stale = conn.execute(
-            "SELECT id, rel_path FROM documents WHERE library_id = ?", (lib_id,)
-        ).fetchall()
-        for doc in stale:
-            if doc["rel_path"] not in seen:
-                delete_document_chunks(conn, doc["id"])
-                conn.execute("DELETE FROM documents WHERE id = ?", (doc["id"],))
-                stats.removed += 1
-                logger.debug("removed from index: %s", doc["rel_path"])
+    stale = conn.execute(
+        "SELECT id, rel_path FROM documents WHERE library_id = ?", (lib_id,)
+    ).fetchall()
+    for doc in stale:
+        if doc["rel_path"] not in seen:
+            delete_document_chunks(conn, doc["id"])
+            conn.execute("DELETE FROM documents WHERE id = ?", (doc["id"],))
+            stats.removed += 1
+            logger.debug("removed from index: %s", doc["rel_path"])
 
-        conn.execute("UPDATE libraries SET updated_at = ? WHERE id = ?", (utc_now(), lib_id))
+    conn.execute("UPDATE libraries SET updated_at = ? WHERE id = ?", (utc_now(), lib_id))
+    return stats
+
+
+def index_library(
+    conn: sqlite3.Connection,
+    lib_id: str,
+    chunker: Chunker,
+) -> IndexStats:
+    _begin_index(conn)
+    try:
+        stats = _index_library(conn, lib_id, chunker)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     return stats
+
+
+def add_and_index_library(
+    conn: sqlite3.Connection,
+    source: Path,
+    name: str,
+    *,
+    chunker: Chunker,
+    version: str | None = None,
+    description: str | None = None,
+    replace: bool = False,
+) -> tuple[str, IndexStats]:
+    _begin_index(conn)
+    try:
+        lib_id = _write_library(
+            conn,
+            source,
+            name,
+            version=version,
+            description=description,
+            replace=replace,
+        )
+        stats = _index_library(conn, lib_id, chunker)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return lib_id, stats
 
 
 def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:

@@ -7,6 +7,7 @@ from virtudoc.indexer.chunker import Chunker
 from virtudoc.indexer.indexer import (
     LibraryExistsError,
     LibraryNotFoundError,
+    add_and_index_library,
     add_library,
     delete_library,
     get_library,
@@ -87,6 +88,74 @@ def test_replace_existing_library(conn, docs_dir):
     lib = get_library(conn, "demo")
     assert lib["version"] == "2.0"
     assert len(list_libraries(conn)) == 1
+
+
+def test_replace_preserves_notes_and_project_link(conn, docs_dir, tmp_path):
+    from virtudoc.notes import add_note, list_notes
+    from virtudoc.versions import get_link, link_library
+
+    lib_id, _ = add_and_index_library(conn, docs_dir, "demo", chunker=Chunker())
+    add_note(conn, lib_id, "Keep this convention")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["demo==1.0"]\n', encoding="utf-8"
+    )
+    link_library(conn, lib_id, tmp_path)
+
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "index.md").write_text("# Replacement\n", encoding="utf-8")
+    add_and_index_library(
+        conn,
+        replacement,
+        "demo",
+        chunker=Chunker(),
+        version="2.0",
+        replace=True,
+    )
+
+    assert [note.text for note in list_notes(conn, lib_id)] == ["Keep this convention"]
+    assert get_link(conn, lib_id)["dep_version"] == "1.0"
+    assert get_library(conn, "demo")["version"] == "2.0"
+
+
+def test_failed_replacement_rolls_back_registration_and_index(
+    conn, docs_dir, tmp_path, monkeypatch
+):
+    from virtudoc.indexer import indexer as indexer_module
+
+    lib_id, _ = add_and_index_library(
+        conn, docs_dir, "demo", chunker=Chunker(), version="1.0"
+    )
+    original_chunks = conn.execute(
+        "SELECT text FROM chunks WHERE library_id = ? ORDER BY id", (lib_id,)
+    ).fetchall()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "index.md").write_text(
+        "# Must not be committed\n\nReplacement body.\n", encoding="utf-8"
+    )
+
+    def fail_insert(*args, **kwargs):
+        raise RuntimeError("indexing failed")
+
+    monkeypatch.setattr(indexer_module, "insert_chunk", fail_insert)
+    with pytest.raises(RuntimeError, match="indexing failed"):
+        add_and_index_library(
+            conn,
+            replacement,
+            "demo",
+            chunker=Chunker(),
+            version="2.0",
+            replace=True,
+        )
+
+    lib = get_library(conn, "demo")
+    assert lib["version"] == "1.0"
+    assert lib["source_path"] == str(docs_dir)
+    chunks = conn.execute(
+        "SELECT text FROM chunks WHERE library_id = ? ORDER BY id", (lib_id,)
+    ).fetchall()
+    assert chunks == original_chunks
 
 
 def test_invalid_name_rejected(conn, docs_dir):
