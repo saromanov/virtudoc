@@ -65,8 +65,8 @@ virtudoc import            # register and index everything from the file
 ## Connect your agent
 
 Run the MCP server and register it in your agent's config. The server speaks
-stdio by default and reindexes changed sources on every start, so the agent
-always sees the current documentation. Agents spawn the server with a
+stdio by default and refreshes a library incrementally when an agent first
+requests it, so the agent always sees current documentation. Agents spawn the server with a
 default environment, so the data directory is `~/.virtudoc` — set
 `VIRTUDOC_HOME` in the server `env` block if you need a custom location.
 

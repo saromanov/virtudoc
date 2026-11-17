@@ -283,7 +283,7 @@ def _pin_current_branch(dest: Path, branch: str | None = None) -> None:
 
 
 def ensure_pinned_checkout(dest: Path) -> str | None:
-    """Reset a fetch-cache clone to its pinned branch before reindexing.
+    """Reset a fetch-cache clone to its pinned branch before serving.
 
     Local operations only (NFR-01: nothing but `fetch` touches the
     network): the checkout goes back to the local `origin/<branch>` ref

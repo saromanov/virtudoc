@@ -69,5 +69,6 @@ itself.
 ## Keeping the index fresh
 
 Editing a source file is enough: the next agent session reindexes changed
-files automatically when the server starts. For a running session, run
-`virtudoc update` — the agent's next tool call sees the new data.
+files automatically on the first request for that library. For a running
+session, run `virtudoc update` — the agent's next tool call sees the new
+data.

@@ -40,8 +40,8 @@ unsupported extensions) always apply and cannot be overridden.
 
 ## Incremental updates
 
-Every file's content hash is stored in the index. On `update` or on server
-start:
+Every file's content hash is stored in the index. On `update` or on a
+request that finds a stale library:
 
 - unchanged files are skipped completely;
 - changed files are re-parsed and their chunks replaced in one transaction;
@@ -62,8 +62,9 @@ Each `get-library-docs` call first compares the source against
 `indexed_at` (config `index.auto_refresh`, on by default): a file added or
 deleted (count mismatch) or any file with a newer mtime triggers an
 incremental reindex before the search, so a long-running `serve` session
-always answers with current docs. The check is local-only: file stats,
-no network.
+always answers with current docs. Startup itself indexes nothing: it only
+resets pinned fetch checkouts, and the first request pays this freshness
+check. The check is local-only: file stats, no network.
 
 ## The SQLite index
 

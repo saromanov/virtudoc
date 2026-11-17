@@ -54,7 +54,7 @@ repo default; the flag overrides the config key.
 
 The chosen branch is recorded in a `.virtudoc-fetch.json` sidecar file
 inside the cache. Every `serve` start resets the clone to the pinned
-branch before reindexing (local-only checkout from the recorded
+branch before serving (local-only checkout from the recorded
 `origin/<branch>` ref — no network, and a dirty working tree is left
 alone); `doctor` warns when the checkout and the pin disagree.
 
@@ -166,8 +166,9 @@ virtudoc serve [--http [PORT]]
 ```
 
 Starts the MCP server: stdio by default, or streamable HTTP on
-`127.0.0.1:PORT` with `--http` (default port from config, 8765). Before
-announcing tools, all libraries are reindexed incrementally. See
+`127.0.0.1:PORT` with `--http` (default port from config, 8765). Startup
+does not index: the first `get-library-docs` call for a library refreshes
+it when its source changed (`index.auto_refresh`). See
 [MCP integration](mcp.md).
 
 ## export / import — move the setup between machines
