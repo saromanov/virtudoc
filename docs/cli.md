@@ -88,6 +88,31 @@ virtudoc note remove <name> --id N
 Notes are attached to a library, survive reindexing and are delivered to
 agents together with documentation. See [Project notes](notes.md).
 
+## init — project onboarding
+
+```bash
+virtudoc init [path] [--link]
+```
+
+Scans every supported dependency manifest in the project directory
+(`pyproject.toml`, `package.json`, `requirements.txt`, `go.mod`, `uv.lock`,
+`poetry.lock`, `Pipfile.lock`), merges the declared dependencies (lockfiles
+contribute their resolved graph) and matches them against the registered
+libraries by name. For each match it prints the documentation version, the
+project version and the status: `match`, `mismatch` or `unknown` (one of the
+versions is missing). Unmatched dependencies are listed with a hint to
+register their documentation; long lists are truncated.
+
+The command is read-only by default and never prompts, so it is safe in
+scripts and CI. Pass `--link` to create the project links for the matched
+libraries — the manifest where each dependency was found is recorded, so a
+dependency present only in a lockfile still links correctly. `path` defaults
+to the current directory.
+
+Exit code is `0` when the scan succeeds (drift is reported, not treated as a
+failure) and `1` when the directory is missing or holds no supported
+manifest.
+
 ## link / unlink — version tracking
 
 ```bash

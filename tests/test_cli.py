@@ -232,9 +232,7 @@ def test_import_is_idempotent(home, docs_dir, tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.count("local/demo") == 1
     with open_db(Config().db_path) as conn:
-        assert [note.text for note in list_notes(conn, "local/demo")] == [
-            "Preserve across imports"
-        ]
+        assert [note.text for note in list_notes(conn, "local/demo")] == ["Preserve across imports"]
 
 
 def test_import_missing_source_fails_cleanly(home, tmp_path, capsys):

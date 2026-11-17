@@ -7,7 +7,10 @@ from virtudoc.indexer.indexer import add_library, index_library
 from virtudoc.versions import (
     detect_manifest,
     extract_dep_version,
+    extract_dependencies,
+    get_link,
     link_library,
+    list_manifests,
     mismatch_payload,
     unlink_library,
     version_status,
@@ -213,3 +216,63 @@ def test_link_errors(conn, docs_dir, tmp_path):
         link_library(conn, lib_id, project)
     with pytest.raises(ValueError, match="project directory not found"):
         link_library(conn, lib_id, tmp_path / "nope")
+
+
+def test_list_manifests_returns_all_present(tmp_path):
+    (tmp_path / "requirements.txt").write_text("demo==1.0\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text('[[package]]\nname = "demo"\nversion = "1.0"\n')
+    assert [path.name for path in list_manifests(tmp_path)] == ["requirements.txt", "uv.lock"]
+    assert list_manifests(tmp_path / "missing") == []
+
+
+def test_extract_dependencies_merges_sources(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text(
+        """
+[project]
+dependencies = ["requests>=2.0", "Demo_Tool~=1.4.0"]
+[project.optional-dependencies]
+test = ["pytest>=8"]
+[tool.poetry.dependencies]
+python = "^3.11"
+legacy = "^0.9"
+""",
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {
+        "requests": "2.0",
+        "demo-tool": "1.4.0",
+        "pytest": "8",
+        "python": "3.11",
+        "legacy": "0.9",
+    }
+
+
+def test_extract_dependencies_handles_broken_manifest(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text("[project\n", encoding="utf-8")
+    assert extract_dependencies(manifest) == {}
+    assert extract_dependencies(tmp_path / "unknown.txt") == {}
+
+
+def test_extract_dependencies_from_go_mod_skips_directives(tmp_path):
+    manifest = tmp_path / "go.mod"
+    manifest.write_text(
+        "module example.com/app\n\ngo 1.22\n\nrequire github.com/acme/demo v1.2.3\n",
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {"demo": "v1.2.3"}
+
+
+def test_link_with_explicit_manifest(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\ndependencies = []\n", encoding="utf-8")
+    lock = project / "uv.lock"
+    lock.write_text('[[package]]\nname = "demo"\nversion = "5.0.0"\n', encoding="utf-8")
+    info = link_library(conn, lib_id, project, manifest=lock)
+    assert info.manifest_path == lock
+    assert info.dep_version == "5.0.0"
+    assert get_link(conn, lib_id)["manifest_path"] == str(lock)

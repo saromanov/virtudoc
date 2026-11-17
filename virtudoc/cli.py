@@ -24,8 +24,9 @@ from .indexer.indexer import (
 )
 from .logging_setup import setup_logging
 from .notes import add_note, list_notes, relevant_notes, remove_note
+from .onboarding import format_report, link_matches, scan_project
 from .search.engine import library_outline, search
-from .versions import link_library, unlink_library
+from .versions import MANIFEST_CANDIDATES, link_library, unlink_library
 
 
 def _chunker_from_config(cfg: Config) -> Chunker:
@@ -64,6 +65,28 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
     print(stats.summary())
     _print_skipped(stats.skipped_files)
     return 0 if stats.errors == 0 else 1
+
+
+def cmd_init(args: argparse.Namespace, cfg: Config) -> int:
+    project = Path(args.path).expanduser()
+    if not project.is_dir():
+        print(f"error: project directory not found: {project}", file=sys.stderr)
+        return 1
+    with _open(cfg) as conn:
+        scan = scan_project(conn, project)
+        if not scan.manifests:
+            print(
+                f"error: no dependency manifest found in {project.expanduser().resolve()}",
+                file=sys.stderr,
+            )
+            print(f"looked for: {', '.join(MANIFEST_CANDIDATES)}", file=sys.stderr)
+            return 1
+        linked, errors = link_matches(conn, scan) if args.link else ([], [])
+    for line in format_report(scan, linked, args.link):
+        print(line)
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 1 if errors else 0
 
 
 def cmd_update(args: argparse.Namespace, cfg: Config) -> int:
@@ -446,6 +469,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description", help="library description")
     p.add_argument("--replace", action="store_true", help="replace an existing library")
     p.set_defaults(func=cmd_add)
+
+    p = sub.add_parser(
+        "init",
+        help="scan a project's dependency manifests and report matching libraries",
+    )
+    p.add_argument("path", nargs="?", default=".", help="project directory (default: current)")
+    p.add_argument(
+        "--link",
+        action="store_true",
+        help="link matched libraries to the project (off by default)",
+    )
+    p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("update", help="incremental reindexing")
     p.add_argument("--name", help="library name (omitted — all libraries)")

@@ -51,6 +51,9 @@ virtudoc note add mylib --text "Use the retry helper for all outbound calls."
 virtudoc link mylib --project /path/to/consuming/project
 virtudoc doctor   # config, sources, index integrity, version drift summary
 
+# Zero-config onboarding: scan the project's manifests and match libraries
+virtudoc init .              # report only; add --link to create the links
+
 # Pull public documentation from a git URL or archive (the only networked command)
 virtudoc fetch --repo https://github.com/org/docs --name theirlib
 

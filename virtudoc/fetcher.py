@@ -56,12 +56,8 @@ def fetch_source(
     dest = cache_path(name)
     lower = repo_url.lower().split("?", 1)[0]
     if lower.endswith((".zip", ".tar.gz", ".tgz", ".tar")):
-        max_extract_bytes = (
-            MAX_EXTRACT_BYTES if max_extract_bytes is None else max_extract_bytes
-        )
-        max_extract_files = (
-            MAX_EXTRACT_FILES if max_extract_files is None else max_extract_files
-        )
+        max_extract_bytes = MAX_EXTRACT_BYTES if max_extract_bytes is None else max_extract_bytes
+        max_extract_files = MAX_EXTRACT_FILES if max_extract_files is None else max_extract_files
         if max_extract_bytes <= 0 or max_extract_files <= 0:
             raise ValueError("archive extraction limits must be positive")
         kind = "zip" if lower.endswith(".zip") else "tar"
@@ -238,9 +234,7 @@ def _replace_cache(root: Path, dest: Path) -> None:
     succeeded = False
     try:
         if dest.exists():
-            backup_parent = Path(
-                tempfile.mkdtemp(prefix=f".{dest.name}.backup-", dir=dest.parent)
-            )
+            backup_parent = Path(tempfile.mkdtemp(prefix=f".{dest.name}.backup-", dir=dest.parent))
             backup = backup_parent / "cache"
             os.replace(dest, backup)
         try:
