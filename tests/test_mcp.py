@@ -225,6 +225,23 @@ def test_serve_startup_does_not_index_libraries(home, docs_dir):
     assert mcp_server_module.build_server(Config()) is not None
 
 
+def test_prepare_serve_closes_its_connection(home, monkeypatch):
+    import virtudoc.mcp_server as mcp_server_module
+
+    real_open_db = mcp_server_module.open_db
+    opened: list = []
+
+    def tracking_open_db(path):
+        connection = real_open_db(path)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(mcp_server_module, "open_db", tracking_open_db)
+    mcp_server_module.prepare_serve(Config())
+    assert opened, "prepare_serve should open a connection"
+    assert all(_connection_closed(conn) for conn in opened)
+
+
 @pytest.mark.anyio
 async def test_mcp_indexes_library_only_on_first_request(home, docs_dir):
     with open_db(Config().db_path) as conn:

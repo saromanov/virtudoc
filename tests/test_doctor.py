@@ -66,3 +66,15 @@ def test_doctor_warns_on_uncommitted_changes(home, tmp_path, capsys):
     assert code == 1
     assert "uncommitted changes" in out
     assert "on branch" not in out
+
+
+def test_doctor_ignores_the_fetch_pin_sidecar(home, tmp_path, capsys):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    from virtudoc.fetcher import PIN_FILE
+
+    clone = _clone(_git_origin(tmp_path), tmp_path)
+    (clone / PIN_FILE).write_text('{"branch": "main"}', encoding="utf-8")
+    code, out = _add_and_doctor(clone, capsys)
+    assert code == 0
+    assert "uncommitted" not in out

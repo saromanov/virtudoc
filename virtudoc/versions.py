@@ -103,7 +103,7 @@ def extract_dependencies(manifest_path: Path) -> dict[str, str | None]:
             return _deps_from_package_lock(manifest_path)
         if manifest_path.name == "Pipfile.lock":
             return _deps_from_pipfile_lock(manifest_path)
-    except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, tomllib.TOMLDecodeError):
         return {}
     return {}
 

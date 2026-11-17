@@ -147,8 +147,11 @@ def _parse_mcp_config(capsys) -> dict:
 def test_mcp_config_prints_ready_snippet(home, capsys):
     config = _parse_mcp_config(capsys)
     entry = config["mcpServers"]["virtudoc"]
-    assert entry["args"] == ["serve"]
-    assert entry["command"]  # absolute path or "<python> -m virtudoc"
+    assert entry["args"][-1] == "serve"
+    # `command` must stay a single executable path: MCP clients do not split it.
+    assert " " not in entry["command"]
+    if entry["args"] != ["serve"]:
+        assert entry["args"] == ["-m", "virtudoc", "serve"]
     assert entry["env"]["VIRTUDOC_HOME"] == str(home)
 
 

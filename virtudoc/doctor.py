@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config, data_dir
-from .fetcher import read_pinned_branch
+from .fetcher import PIN_FILE, read_pinned_branch
 from .versions import extract_dep_version, version_status
 
 
@@ -60,7 +60,7 @@ def _warn_unstable_source(result: CheckResult, lib_id: str, source: Path) -> Non
                 f"the index follows this checkout; "
                 f"'virtudoc fetch --branch {default_name}' gives a stable team baseline"
             )
-    if git("status", "--porcelain"):
+    if git("status", "--porcelain", "--", ".", f":(exclude){PIN_FILE}"):
         result.warn(
             f"{lib_id}: source has uncommitted changes — indexed docs may include work in progress"
         )

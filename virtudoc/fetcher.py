@@ -261,6 +261,8 @@ def read_pinned_branch(dest: Path) -> str | None:
         data = json.loads((dest / PIN_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
     branch = data.get("branch")
     return str(branch) if branch else None
 

@@ -323,23 +323,29 @@ def cmd_unlink(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
-def _server_command() -> str:
-    """Absolute path of the virtudoc binary as an MCP client will see it."""
+def _server_command() -> tuple[str, list[str]]:
+    """Executable and base arguments an MCP client needs to start the server.
+
+    MCP clients execute `command` directly without a shell, so the
+    `-m virtudoc` fallback must be passed through `args` rather than
+    appended to the command string.
+    """
     argv0 = Path(sys.argv[0]).resolve() if sys.argv[0] else None
     if argv0 and argv0.name == "virtudoc" and argv0.is_file():
-        return str(argv0)
+        return str(argv0), []
     resolved = shutil.which("virtudoc")
     if resolved:
-        return str(Path(resolved).resolve())
-    return f"{sys.executable} -m virtudoc"
+        return str(Path(resolved).resolve()), []
+    return sys.executable, ["-m", "virtudoc"]
 
 
 def cmd_mcp_config(args: argparse.Namespace, cfg: Config) -> int:
     import json
 
+    command, base_args = _server_command()
     server_entry: dict[str, object] = {
-        "command": _server_command(),
-        "args": ["serve"],
+        "command": command,
+        "args": [*base_args, "serve"],
     }
     env = {"VIRTUDOC_HOME": str(data_dir())} if os.environ.get(DATA_DIR_ENV) else {}
     if env:

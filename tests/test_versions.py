@@ -62,6 +62,20 @@ def test_extract_from_requirements(tmp_path):
     assert extract_dep_version(manifest, "other") == "1.0"
 
 
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [
+        ("package.json", "[]"),
+        ("pyproject.toml", 'project = "not-a-table"\n'),
+        ("Pipfile.lock", '{"default": []}'),
+    ],
+)
+def test_malformed_manifest_yields_empty_mapping(tmp_path, filename, content):
+    manifest = tmp_path / filename
+    manifest.write_text(content, encoding="utf-8")
+    assert extract_dependencies(manifest) == {}
+
+
 def test_extract_from_go_mod(tmp_path):
     manifest = tmp_path / "go.mod"
     manifest.write_text(

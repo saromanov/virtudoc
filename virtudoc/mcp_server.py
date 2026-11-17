@@ -209,7 +209,7 @@ def prepare_serve(config: Config) -> None:
     hashed here. `get-library-docs` refreshes the requested library
     through `refresh_if_stale` instead.
     """
-    with open_db(config.db_path) as conn:
+    with closing(open_db(config.db_path)) as conn:
         rows = conn.execute("SELECT id, source_path FROM libraries ORDER BY id").fetchall()
     for row in rows:
         source = Path(row["source_path"])

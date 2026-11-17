@@ -242,6 +242,16 @@ def test_fetch_records_pinned_branch(home, tmp_path):
     assert read_pinned_branch(cache_path("pinlib")) == "release"
 
 
+def test_malformed_pin_sidecar_is_ignored(home):
+    from virtudoc.fetcher import PIN_FILE, ensure_pinned_checkout, read_pinned_branch
+
+    dest = cache_path("badpin")
+    dest.mkdir(parents=True)
+    (dest / PIN_FILE).write_text("[]", encoding="utf-8")
+    assert read_pinned_branch(dest) is None
+    assert ensure_pinned_checkout(dest) is None
+
+
 def test_ensure_pinned_checkout_resets_drifted_clone(home, tmp_path):
     if shutil.which("git") is None:
         pytest.skip("git not available")
