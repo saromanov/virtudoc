@@ -38,12 +38,13 @@ RESOLVE_DESCRIPTION = (
 GET_DOCS_DESCRIPTION = (
     "Get documentation of a library for the agent's question or task. "
     "Use a focused query with keywords (library terminology works better than "
-    "full sentences). Output is assembled under a token budget; use page=2 to "
-    "continue. Fragments contain Markdown text, the heading path and the source "
-    "file path. If nothing is found, the response contains top-level sections "
-    "of the library to help rephrase the query. Use mode='outline' to get the "
-    "section tree with token estimates instead of fragments, and 'section' to "
-    "restrict the output to one branch (e.g. 'API -> Middleware')."
+    "full sentences). Output is assembled under a token budget; total_matches "
+    "and has_more tell you whether page=2 continues the ranking. Fragments "
+    "contain Markdown text, the heading path and the source file path. If "
+    "nothing is found, the response contains top-level sections of the library "
+    "to help rephrase the query. Use mode='outline' to get the section tree "
+    "with token estimates instead of fragments, and 'section' to restrict the "
+    "output to one branch (e.g. 'API -> Middleware')."
 )
 
 
@@ -150,14 +151,16 @@ def build_server(config: Config) -> MCPServer:
                 section=section,
                 window_tokens=config.get_int("search.snippet_window_tokens"),
             )
-            if not result.snippets:
+            if not result.snippets and not result.total_matches:
                 return {
                     "library_id": libraryId,
                     "query": query,
-                    "page": page,
+                    "page": result.page,
                     "snippets": [],
                     "notes": notes,
                     "total_tokens": 0,
+                    "total_matches": 0,
+                    "has_more": False,
                     "message": (
                         "no fragments found; try a keyword query. "
                         "Top-level sections of this library:"
@@ -186,7 +189,13 @@ def build_server(config: Config) -> MCPServer:
                 ],
                 "notes": notes,
                 "total_tokens": result.total_tokens,
+                "total_matches": result.total_matches,
+                "has_more": result.has_more,
             }
+            if not result.snippets:
+                payload["message"] = (
+                    f"no fragments on page {result.page}; total_matches: {result.total_matches}"
+                )
             warning = mismatch_payload(conn, libraryId)
             return {"version_mismatch": warning, **payload} if warning else payload
 

@@ -119,9 +119,10 @@ default environment, so the data directory is `~/.virtudoc` — set
   library by its name and your question. Call it first.
 - `get-library-docs(libraryId, query, tokens=5000, language, page, mode,
   section)` — Markdown fragments with heading paths and source file paths,
-  assembled under the token budget. Relevant project notes are included
-  before the fragments. Empty results return the library's top-level
-  sections to help rephrase the query.
+  assembled under the token budget. `total_matches` and `has_more` describe
+  pagination; `page=N+1` continues the ranking. Relevant project notes are
+  included before the fragments. Empty results return the library's
+  top-level sections to help rephrase the query.
 
 Optionally expose the server over streamable HTTP on 127.0.0.1 for clients
 without stdio support: `virtudoc serve --http [port]` (default port 8765).

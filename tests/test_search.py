@@ -75,6 +75,70 @@ def test_search_no_results(indexed, conn):
     result = search(conn, "абракадабра зизигаура")
     assert result.snippets == []
     assert result.total_tokens == 0
+    assert result.total_matches == 0
+    assert result.has_more is False
+
+
+def _paginated_library(tmp_path, conn, count=7):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    src = tmp_path / "manydocs"
+    src.mkdir()
+    for index in range(count):
+        (src / f"doc{index}.md").write_text(
+            f"# Раздел {index}\n\npaginationmarker уникальный текст {index}.\n",
+            encoding="utf-8",
+        )
+    lib_id = add_library(conn, src, "many")
+    index_library(conn, lib_id, Chunker())
+    return lib_id
+
+
+def test_search_pagination_metadata(tmp_path, conn):
+    lib_id = _paginated_library(tmp_path, conn)
+
+    first = search(conn, "paginationmarker", library_id=lib_id, max_results=2)
+    assert first.total_matches == 7
+    assert first.page_chunks == 2
+    assert first.has_more is True
+
+    second = search(conn, "paginationmarker", library_id=lib_id, max_results=2, page=2)
+    assert second.total_matches == 7
+    assert second.page_chunks == 2
+    assert second.has_more is True
+    assert {s.text for s in first.snippets}.isdisjoint(s.text for s in second.snippets)
+
+    last = search(conn, "paginationmarker", library_id=lib_id, max_results=2, page=4)
+    assert last.total_matches == 7
+    assert last.page_chunks == 1
+    assert last.has_more is False
+
+    beyond = search(conn, "paginationmarker", library_id=lib_id, max_results=2, page=5)
+    assert beyond.total_matches == 7
+    assert beyond.snippets == []
+    assert beyond.has_more is False
+
+
+def test_search_pagination_with_token_budget_does_not_skip_chunks(tmp_path, conn):
+    lib_id = _paginated_library(tmp_path, conn, count=6)
+
+    seen: set[str] = set()
+    for page in range(1, 20):
+        result = search(
+            conn,
+            "paginationmarker",
+            library_id=lib_id,
+            token_budget=20,
+            max_results=20,
+            page=page,
+        )
+        assert result.total_matches == 6
+        assert seen.isdisjoint(s.text for s in result.snippets)
+        seen.update(s.text for s in result.snippets)
+        if not result.has_more:
+            break
+    assert len(seen) == 6
 
 
 def test_topic_boost_prefers_matching_section(indexed, conn):

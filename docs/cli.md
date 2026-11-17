@@ -70,12 +70,15 @@ update, source path.
 ## search — search from the terminal
 
 ```bash
-virtudoc search <query> [--name <name>] [--tokens N] [--section "Path -> Branch"] [--outline]
+virtudoc search <query> [--name <name>] [--tokens N] [--page N] [--section "Path -> Branch"] [--outline]
 ```
 
-Prints the same fragments an agent receives via MCP. `--outline` prints the
-section tree of a library (requires `--name`) with chunk counts and token
-estimates; `--section` restricts output to one branch in both modes.
+Prints the same fragments an agent receives via MCP. The summary line reports
+`fragments` on the page, `total_matches` for the query, `has_more` and the
+consumed `tokens`; when `has_more` is true, use `--page N+1` to continue.
+`--outline` prints the section tree of a library (requires `--name`) with
+chunk counts and token estimates; `--section` restricts output to one branch
+in both modes.
 
 ## note — project notes
 
