@@ -361,9 +361,7 @@ def test_non_loopback_http_requires_token(home, monkeypatch, capsys):
         ("0.0.0.0", "secret", "secret"),
     ],
 )
-def test_http_authentication_configuration(
-    home, monkeypatch, host, token, expected_token
-):
+def test_http_authentication_configuration(home, monkeypatch, host, token, expected_token):
     import virtudoc.mcp_server as mcp_server_module
 
     monkeypatch.delenv("VIRTUDOC_HTTP_TOKEN", raising=False)

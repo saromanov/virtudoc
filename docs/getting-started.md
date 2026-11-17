@@ -45,14 +45,19 @@ with the documentation.
 ## 5. Warn about version drift
 
 ```bash
-virtudoc link mylib --project /path/to/consuming/project
+virtudoc init /path/to/consuming/project
+virtudoc init /path/to/consuming/project --link
 virtudoc doctor
 ```
 
-`link` reads the project's dependency manifest (pyproject.toml,
-package.json, requirements.txt or go.mod) and records the expected version.
-If it diverges from the indexed docs version, `get-library-docs` output
-starts with a `version_mismatch` warning, and `doctor` reports the drift.
+`init` scans the project's manifests, reports which dependencies have
+registered documentation and whether the versions agree, and lists
+dependencies without docs. It changes nothing unless you pass `--link`.
+Linking reads the dependency manifest (pyproject.toml, package.json,
+requirements.txt, go.mod, uv.lock, poetry.lock or Pipfile.lock) and records
+the expected version. If it diverges from the indexed docs version,
+`get-library-docs` output starts with a `version_mismatch` warning, and
+`doctor` reports the drift.
 
 ## 6. Connect an agent
 

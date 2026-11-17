@@ -42,6 +42,13 @@ def detect_manifest(project_path: Path) -> Path | None:
     return None
 
 
+def list_manifests(project_path: Path) -> list[Path]:
+    """Every supported manifest present in the directory, in priority order."""
+    return [
+        path for path in (project_path / name for name in MANIFEST_CANDIDATES) if path.is_file()
+    ]
+
+
 def version_core(text: str | None) -> tuple[int, ...] | None:
     if not text:
         return None
@@ -64,24 +71,33 @@ def version_status(doc_version: str | None, dep_version: str | None) -> str:
     return "match" if doc_core == dep_core else "mismatch"
 
 
-def extract_dep_version(manifest_path: Path, library_name: str) -> str | None:
-    name = normalize_name(library_name)
+def extract_dependencies(manifest_path: Path) -> dict[str, str | None]:
+    """Declared dependencies of a manifest: normalized name -> version.
+
+    Lockfiles contribute their whole resolved graph, while direct manifests
+    contribute only declared dependencies. An unreadable or unknown manifest
+    yields an empty mapping instead of raising.
+    """
     try:
         if manifest_path.name == "pyproject.toml":
-            return _from_pyproject(manifest_path, name)
+            return _deps_from_pyproject(manifest_path)
         if manifest_path.name == "package.json":
-            return _from_package_json(manifest_path, name)
+            return _deps_from_package_json(manifest_path)
         if manifest_path.name == "requirements.txt":
-            return _from_requirements(manifest_path, name)
+            return _deps_from_requirements(manifest_path)
         if manifest_path.name == "go.mod":
-            return _from_go_mod(manifest_path, name)
+            return _deps_from_go_mod(manifest_path)
         if manifest_path.name in ("uv.lock", "poetry.lock"):
-            return _from_package_lock(manifest_path, name)
+            return _deps_from_package_lock(manifest_path)
         if manifest_path.name == "Pipfile.lock":
-            return _from_pipfile_lock(manifest_path, name)
+            return _deps_from_pipfile_lock(manifest_path)
     except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError):
-        return None
-    return None
+        return {}
+    return {}
+
+
+def extract_dep_version(manifest_path: Path, library_name: str) -> str | None:
+    return extract_dependencies(manifest_path).get(normalize_name(library_name))
 
 
 def _match_version(spec: str | None) -> str | None:
@@ -91,102 +107,111 @@ def _match_version(spec: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def _from_pyproject(path: Path, name: str) -> str | None:
+def _deps_from_pyproject(path: Path) -> dict[str, str | None]:
     with open(path, "rb") as fh:
         data = tomllib.load(fh)
     project = data.get("project", {})
     requirements = list(project.get("dependencies", []))
     for group in project.get("optional-dependencies", {}).values():
         requirements.extend(group)
+    deps: dict[str, str | None] = {}
     for req in requirements:
         if not isinstance(req, str):
             continue
         match = _REQ_NAME_RE.match(req)
-        if match and normalize_name(match.group(1)) == name:
-            return _match_version(req[match.end() :])
-    return _from_poetry_section(data, name)
+        if match:
+            deps[normalize_name(match.group(1))] = _match_version(req[match.end() :])
+    for dep, version in _deps_from_poetry_section(data).items():
+        deps.setdefault(dep, version)
+    return deps
 
 
-def _from_poetry_section(data: dict, name: str) -> str | None:
+def _deps_from_poetry_section(data: dict) -> dict[str, str | None]:
     poetry = data.get("tool", {}).get("poetry", {})
     dependencies = poetry.get("dependencies", {})
     if not isinstance(dependencies, dict):
-        return None
+        return {}
+    deps: dict[str, str | None] = {}
     for dep, spec in dependencies.items():
-        if normalize_name(dep) == name:
-            spec_value = spec.get("version") if isinstance(spec, dict) else spec
-            return _match_version(str(spec_value)) if spec_value else None
-    return None
+        spec_value = spec.get("version") if isinstance(spec, dict) else spec
+        deps[normalize_name(dep)] = _match_version(str(spec_value)) if spec_value else None
+    return deps
 
 
-def _from_package_json(path: Path, name: str) -> str | None:
+def _deps_from_package_json(path: Path) -> dict[str, str | None]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    deps: dict[str, str] = {}
-    deps.update(data.get("dependencies", {}))
-    deps.update(data.get("devDependencies", {}))
-    for dep, spec in deps.items():
-        if normalize_name(dep) == name:
-            return _match_version(spec)
-    return None
+    declared: dict[str, str] = {}
+    declared.update(data.get("dependencies", {}))
+    declared.update(data.get("devDependencies", {}))
+    return {normalize_name(dep): _match_version(spec) for dep, spec in declared.items()}
 
 
-def _from_requirements(path: Path, name: str) -> str | None:
+def _deps_from_requirements(path: Path) -> dict[str, str | None]:
+    deps: dict[str, str | None] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
         match = _REQ_NAME_RE.match(line)
-        if match and normalize_name(match.group(1)) == name:
-            return _match_version(line[match.end() :])
-    return None
+        if match:
+            deps[normalize_name(match.group(1))] = _match_version(line[match.end() :])
+    return deps
 
 
-def _from_go_mod(path: Path, name: str) -> str | None:
+def _deps_from_go_mod(path: Path) -> dict[str, str | None]:
+    deps: dict[str, str | None] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip().startswith(("module ", "go ")):
+            continue
         match = _GO_MOD_RE.match(line)
-        if match and normalize_name(match.group(1).rsplit("/", 1)[-1]) == name:
-            return match.group(2)
-    return None
+        if match:
+            name = normalize_name(match.group(1).rsplit("/", 1)[-1])
+            deps[name] = match.group(2)
+    return deps
 
 
-def _from_package_lock(path: Path, name: str) -> str | None:
+def _deps_from_package_lock(path: Path) -> dict[str, str | None]:
     """uv.lock and poetry.lock share the [[package]] table shape."""
     with open(path, "rb") as fh:
         data = tomllib.load(fh)
+    deps: dict[str, str | None] = {}
     for package in data.get("package", []):
         if not isinstance(package, dict):
             continue
-        if normalize_name(str(package.get("name", ""))) == name:
+        name = normalize_name(str(package.get("name", "")))
+        if name:
             version = package.get("version")
-            return str(version) if version else None
-    return None
+            deps[name] = str(version) if version else None
+    return deps
 
 
-def _from_pipfile_lock(path: Path, name: str) -> str | None:
+def _deps_from_pipfile_lock(path: Path) -> dict[str, str | None]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    deps: dict[str, str | None] = {}
     for section in ("default", "develop"):
-        deps = data.get(section, {})
-        for dep, info in deps.items():
-            if normalize_name(dep) == name:
-                spec = info.get("version") if isinstance(info, dict) else None
-                return _match_version(spec)
-    return None
+        for dep, info in data.get(section, {}).items():
+            spec = info.get("version") if isinstance(info, dict) else None
+            deps[normalize_name(dep)] = _match_version(spec)
+    return deps
 
 
 def link_library(
     conn: sqlite3.Connection,
     library_id: str,
     project_path: Path,
+    manifest: Path | None = None,
 ) -> VersionInfo:
     project_path = Path(project_path).expanduser().resolve()
     if not project_path.is_dir():
         raise ValueError(f"project directory not found: {project_path}")
-    manifest = detect_manifest(project_path)
+    manifest = Path(manifest).expanduser().resolve() if manifest else detect_manifest(project_path)
     if manifest is None:
         raise ValueError(
             f"no dependency manifest found in {project_path}; "
             f"looked for: {', '.join(MANIFEST_CANDIDATES)}"
         )
+    if not manifest.is_file():
+        raise ValueError(f"dependency manifest not found: {manifest}")
     lib_name = library_id.rsplit("/", 1)[-1]
     version = extract_dep_version(manifest, lib_name)
     if version is None:

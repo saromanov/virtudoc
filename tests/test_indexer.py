@@ -123,9 +123,7 @@ def test_failed_replacement_rolls_back_registration_and_index(
 ):
     from virtudoc.indexer import indexer as indexer_module
 
-    lib_id, _ = add_and_index_library(
-        conn, docs_dir, "demo", chunker=Chunker(), version="1.0"
-    )
+    lib_id, _ = add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="1.0")
     original_chunks = conn.execute(
         "SELECT text FROM chunks WHERE library_id = ? ORDER BY id", (lib_id,)
     ).fetchall()

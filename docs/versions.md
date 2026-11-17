@@ -24,6 +24,20 @@ The command:
 A library can have one link; linking again replaces it.
 `virtudoc unlink mylib` removes the connection.
 
+## Bulk onboarding with `virtudoc init`
+
+```bash
+virtudoc init /path/to/project        # report only
+virtudoc init /path/to/project --link # also create links for the matches
+```
+
+`init` scans all manifests in the project at once, matches dependencies to
+registered libraries and shows the version status for each. It is
+non-interactive and read-only until `--link` is passed, so you can inspect
+the report before anything is recorded. Matched libraries are linked to the
+manifest the dependency was found in, which matters when the dependency is
+declared only in a lockfile.
+
 ## Where the warning appears
 
 When the linked dependency version diverges from the documentation
