@@ -137,11 +137,13 @@ directory patterns) excludes generated or vendor trees from indexing.
 
 - The **chunker** splits documents along H2/H3 headings (target chunk size
   600 tokens, hard limit 1200, 60-token overlap); code blocks are never split.
-- **Search** is SQLite FTS5 with BM25 ranking. Queries cascade:
-  exact `AND` → prefix `AND` with ending stemming → `OR`, so Russian
-  inflections (`пакетная` finds `пакетной`) and fuzzy phrasing both resolve.
+- **Search** is SQLite FTS5 with BM25 ranking; fragment scores are BM25
+  values, not positions. Queries cascade: exact `AND` → prefix `AND` with
+  Russian ending / English suffix stemming → `OR`, so Russian inflections
+  (`пакетная` finds `пакетной`) and fuzzy phrasing both resolve.
 - Results are assembled under a token budget (default 5000) with a
-  topic boost for chunks whose heading path matches the query.
+  topic boost for chunks whose heading path matches the query on token
+  boundaries.
 - **Indexing is incremental**: unchanged files are skipped by content hash.
 - All data lives in `~/.virtudoc/` (WAL-mode `index.db`, config, log).
   Deleting the directory removes the system completely.

@@ -150,7 +150,7 @@ Fragments mode returns:
       "heading_path": "API -> Authentication",
       "source": "api/auth.md",
       "text": "Markdown fragment...",
-      "score": 1.25
+      "score": 2.41
     }
   ],
   "notes": [{ "id": 1, "text": "...", "created_at": "..." }],
@@ -166,6 +166,10 @@ Fragments mode returns:
   the previous page's token budget, so budget filtering does not skip
   chunks. Requesting a page past the end returns empty `snippets` with
   the same `total_matches`.
+- `score` is a BM25-based relevance value: larger means more relevant.
+  The topic boost and the code-language boost multiply it. Scores are
+  comparable only within one response — see
+  [How search works](search.md#score-semantics).
 - When docs and project versions diverge (see
   [Version drift](versions.md)), the output starts with a
   `version_mismatch` block naming both versions and the manifest.

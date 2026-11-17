@@ -10,16 +10,21 @@ terminal and for agents calling `get-library-docs`.
 2. **Tokenization** splits the query into words (latin and cyrillic).
 3. **A cascade of FTS5 queries** runs until something hits:
    - exact `AND` — all query words must be present;
-   - prefix `AND` — words are stemmed by stripping common endings and
-     matched as prefixes, so Russian inflections resolve: `пакетная`
-     finds `пакетной`, `запросов` finds `запросы`;
+   - prefix `AND` — words are reduced to stems and matched as prefixes.
+     Russian words lose common noun/adjective endings, English words lose
+     only inflectional suffixes (`-ing`, `-ed`, `-es`, `-s`, `-ies`), so
+     `пакетная` finds `пакетной`, `запросов` finds `запросы`,
+     `configuring` finds `configured`. English words are never cut to an
+     arbitrary length: `assert` does not become a prefix of `assessment`;
    - `OR` — any word is enough (ranked by relevance);
    - trigram `OR` — a second index over the same chunks matches query
      words as *substrings*, so subword hits inside compound identifiers
      (`auth` inside `middlewareAuth`) still surface.
 4. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
-   file name lexically matches query words get a **topic boost**; chunks
-   containing code blocks in the requested `language` are promoted.
+   file name matches a query word on **token boundaries** get a topic
+   boost; chunks containing code blocks in the requested `language` are
+   promoted. A query word inside a longer unrelated word (`api` inside
+   `Partial`) does not count as a topic match.
 5. **Assembly.** Long chunks are cut down to a window around the densest
    cluster of query-term occurrences (`search.snippet_window_tokens`,
    400 by default, 0 disables the trimming) so the agent pays for the
@@ -31,6 +36,23 @@ terminal and for agents calling `get-library-docs`.
    page) and `has_more`. `page=2` continues with the first fragment that
    did not fit the previous page, so token-budget filtering never drops
    chunks between pages.
+
+## Score semantics
+
+`score` in a fragment is a **relevance value, not a probability and not a
+position**. It is the negation of SQLite's FTS5 `bm25()` rank for the
+chunk — bm25 returns negative values where more negative is better, so
+the exposed score grows with relevance. On top of that:
+
+- a topic match (heading path or file name, on token boundaries)
+  multiplies the score by `1.25`;
+- a matching code `language` multiplies it by `1.15`.
+
+Only scores inside one response are comparable. Absolute values depend
+on the library size, chunk lengths and query terms, are not normalized
+to a fixed range, and may change between versions. Two chunks with the
+same text and the same query get the same score regardless of the order
+in which the database returns them.
 
 ## Tips for good queries
 

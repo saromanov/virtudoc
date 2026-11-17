@@ -1,0 +1,74 @@
+{
+  "description": "Small deterministic relevance dataset: ranking, topic matching, token-boundary topic matching, Russian and English stemming, fallback search.",
+  "documents": {
+    "deploy.md": "# Deployment\n\n## Rollback\n\ndeploy rollback deploy rollback deploy rollback deploy rollback deploy rollback.\n",
+    "notes.md": "# Release notes\n\n## Rollback\n\nA deploy can rollback automatically when health checks fail.\n",
+    "unrelated.md": "# Colors\n\n## Palette\n\nThe palette uses warm tones and soft typography.\n",
+    "topic.md": "# Middleware\n\n## Pipeline\n\nThe middleware chain runs hooks in declaration order.\n",
+    "hooks.md": "# Hooks\n\n## Request flow\n\nThe middleware chain runs hooks in declaration order.\n",
+    "partial.md": "# Partial responses\n\n## Details\n\nThe api version is negotiated per request.\n",
+    "versioning.md": "# Versioning\n\n## Details\n\nThe api version is negotiated per request.\n",
+    "configured.md": "# Worker\n\n## Settings\n\nThe client is configured through environment variables.\n",
+    "queries.md": "# Storage\n\n## Access\n\nEach query returns a page of rows; the query cache is bounded.\n",
+    "package.md": "# Установка\n\n## Пакеты\n\nПакетной установкой занимается менеджер зависимостей.\n",
+    "requests.md": "# API\n\n## Запросы\n\nЗапросы выполняются последовательно.\n",
+    "subword.md": "# Авторизация\n\n## Цепочка\n\nВнутри функции вызывается middlewareAuthWrapper для проверки.\n",
+    "assessment.md": "# Оценка\n\n## Проверка\n\nThe assessment runs after every release.\n"
+  },
+  "cases": [
+    {
+      "name": "bm25_ranking_prefers_term_repetition",
+      "query": "deploy rollback",
+      "expected_top": "deploy.md",
+      "expected_sources": ["notes.md"]
+    },
+    {
+      "name": "topic_heading_match",
+      "query": "middleware",
+      "expected_top": "topic.md",
+      "expected_sources": ["hooks.md"]
+    },
+    {
+      "name": "topic_match_respects_token_boundaries",
+      "query": "api",
+      "expected_sources": ["partial.md", "versioning.md"],
+      "equal_scores": ["partial.md", "versioning.md"]
+    },
+    {
+      "name": "russian_stemming_adjective",
+      "query": "пакетная",
+      "expected_top": "package.md"
+    },
+    {
+      "name": "russian_stemming_plural",
+      "query": "запросов",
+      "expected_top": "requests.md"
+    },
+    {
+      "name": "english_stemming_gerund",
+      "query": "configuring",
+      "expected_top": "configured.md"
+    },
+    {
+      "name": "english_stemming_plural",
+      "query": "queries",
+      "expected_top": "queries.md"
+    },
+    {
+      "name": "english_stemming_has_no_fixed_truncation",
+      "query": "assert",
+      "expected_empty": true
+    },
+    {
+      "name": "or_fallback_stays_effective",
+      "query": "rollback nonexistentword",
+      "expected_top": "deploy.md",
+      "expected_sources": ["notes.md"]
+    },
+    {
+      "name": "trigram_fallback_finds_subword",
+      "query": "auth",
+      "expected_top": "subword.md"
+    }
+  ]
+}

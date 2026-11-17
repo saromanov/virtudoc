@@ -14,8 +14,12 @@ from ..tokens import (
 )
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 TOPIC_BONUS = 0.25
+LANGUAGE_BONUS = 0.15
+# A topic prefix shorter than this matches too many unrelated headings.
+MIN_TOPIC_PREFIX = 4
 
 
 @dataclass
@@ -87,7 +91,28 @@ _ENDINGS = (
 )
 
 
+_LATIN_SUFFIXES = (("ies", "y"), ("ing", ""), ("ed", ""), ("es", ""), ("s", ""))
+
+
+def _latin_stem(token: str) -> str:
+    """Strip only inflectional English suffixes, never arbitrary characters.
+
+    Cutting a fixed number of trailing letters turns unrelated words into
+    prefixes of each other (`article` and `art`), so English tokens keep
+    their stem unless a known suffix applies.
+    """
+    if len(token) < 5:
+        return token
+    for suffix, replacement in _LATIN_SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+            return token[: -len(suffix)] + replacement
+    return token
+
+
 def _stem(token: str) -> str:
+    """Return the prefix used by the prefix-search cascade stage."""
+    if _LATIN_TOKEN_RE.fullmatch(token):
+        return _latin_stem(token)
     for ending in _ENDINGS:
         if token.endswith(ending) and len(token) - len(ending) >= 4:
             return token[: -len(ending)]
@@ -143,9 +168,28 @@ def _fetch_candidates(
     return conn.execute(sql, params).fetchall()
 
 
+def _topic_tokens(row: sqlite3.Row) -> set[str]:
+    """Word tokens of the chunk's heading path and file name.
+
+    Substring containment is not used: a query token must coincide with a
+    whole topic token (or be a long enough prefix of one).
+    """
+    text = f"{row['heading_path'] or ''} {row['rel_path'] or ''}".lower()
+    return set(_TOKEN_RE.findall(fts_normalize(text)))
+
+
+def _topic_token_matches(token: str, topic: str) -> bool:
+    if token == topic:
+        return True
+    stem = _stem(token)
+    if len(stem) >= MIN_TOPIC_PREFIX and topic.startswith(stem):
+        return True
+    return len(topic) >= MIN_TOPIC_PREFIX and token.startswith(topic)
+
+
 def _topic_boost(row: sqlite3.Row, tokens: list[str]) -> bool:
-    haystacks = (row["heading_path"] or "").lower(), (row["rel_path"] or "").lower()
-    return any(token in haystack for token in tokens for haystack in haystacks)
+    topic_tokens = _topic_tokens(row)
+    return any(_topic_token_matches(token, topic) for token in tokens for topic in topic_tokens)
 
 
 def _find_all(haystack: str, needle: str) -> list[int]:
@@ -288,11 +332,14 @@ def search(
             )
 
     scored: list[tuple[float, sqlite3.Row]] = []
-    for position, row in enumerate(candidates):
-        base = 1.0 / (position + 1)
-        score = base + (TOPIC_BONUS if _topic_boost(row, tokens) else 0.0)
+    for row in candidates:
+        # FTS5 bm25() returns a negative rank (more negative is better), so
+        # its negation is a relevance score: larger means more relevant.
+        score = max(0.0, -float(row["rank"]))
+        if _topic_boost(row, tokens):
+            score *= 1.0 + TOPIC_BONUS
         if language and (row["lang"] or "").lower() == language.lower():
-            score += 0.15
+            score *= 1.0 + LANGUAGE_BONUS
         scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
 
