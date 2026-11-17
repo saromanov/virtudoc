@@ -58,9 +58,19 @@ def version_core(text: str | None) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def _trim_trailing_zeros(core: tuple[int, ...]) -> tuple[int, ...]:
+    """Drop trailing zero components: (3, 4, 0) and (3, 4) are the same version."""
+    end = len(core)
+    while end > 1 and core[end - 1] == 0:
+        end -= 1
+    return core[:end]
+
+
 def version_status(doc_version: str | None, dep_version: str | None) -> str:
     """One of: match, mismatch, unknown.
 
+    Numerically equivalent versions match regardless of trailing zero
+    components: "3.4" and "3.4.0" are the same release.
     Mismatch severity (same major vs different major) is derivable from the
     versions themselves; the status only reports whether they diverge.
     """
@@ -68,7 +78,9 @@ def version_status(doc_version: str | None, dep_version: str | None) -> str:
     dep_core = version_core(dep_version)
     if doc_core is None or dep_core is None:
         return "unknown"
-    return "match" if doc_core == dep_core else "mismatch"
+    return (
+        "match" if _trim_trailing_zeros(doc_core) == _trim_trailing_zeros(dep_core) else "mismatch"
+    )
 
 
 def extract_dependencies(manifest_path: Path) -> dict[str, str | None]:
