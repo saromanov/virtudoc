@@ -164,6 +164,16 @@ def test_version_status():
     assert version_status("1.0", "garbage") == "unknown"
 
 
+def test_version_status_ignores_trailing_zeros():
+    assert version_status("3.4", "3.4.0") == "match"
+    assert version_status("3.4.0", "3.4") == "match"
+    assert version_status("1", "1.0.0") == "match"
+    assert version_status("2.0.0.0", "2") == "match"
+    assert version_status("1.0.0", "1.0.1") == "mismatch"
+    assert version_status("1.0", "1.1") == "mismatch"
+    assert version_status("0.0", "0") == "match"
+
+
 @pytest.fixture
 def linked(conn, docs_dir, tmp_path):
     lib_id = add_library(conn, docs_dir, "demo", version="1.0")
@@ -200,6 +210,30 @@ def test_mismatch_payload_none_when_match(conn, docs_dir, tmp_path):
     (project / "requirements.txt").write_text("demo==2.0.0\n", encoding="utf-8")
     link_library(conn, lib_id, project)
     assert mismatch_payload(conn, lib_id) is None
+
+
+def test_mismatch_payload_none_for_trailing_zero_versions(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="3.4")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==3.4.0\n", encoding="utf-8")
+    info = link_library(conn, lib_id, project)
+    assert info.dep_version == "3.4.0"
+    assert mismatch_payload(conn, lib_id) is None
+
+
+def test_mismatch_payload_reports_meaningful_difference(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="3.4")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==3.4.1\n", encoding="utf-8")
+    link_library(conn, lib_id, project)
+    payload = mismatch_payload(conn, lib_id)
+    assert payload is not None
+    assert payload["documentation_version"] == "3.4"
+    assert payload["project_version"] == "3.4.1"
 
 
 def test_link_errors(conn, docs_dir, tmp_path):

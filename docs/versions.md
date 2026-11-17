@@ -21,6 +21,10 @@ The command:
    case-insensitive; underscores and hyphens are treated as equivalent).
 3. Records the expected version in the index.
 
+Versions are compared numerically and trailing zero components are ignored:
+`3.4` matches `3.4.0`. Unknown or unparseable versions yield `unknown` and
+produce no warning.
+
 A library can have one link; linking again replaces it.
 `virtudoc unlink mylib` removes the connection.
 
