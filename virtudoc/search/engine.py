@@ -33,9 +33,11 @@ class SearchResult:
     page: int = 1
     snippets: list[Snippet] = field(default_factory=list)
     total_tokens: int = 0
+    total_matches: int = 0
+    has_more: bool = False
 
     @property
-    def total_chunks(self) -> int:
+    def page_chunks(self) -> int:
         return len(self.snippets)
 
 
@@ -115,7 +117,7 @@ def _fetch_candidates(
     conn: sqlite3.Connection,
     match: str,
     library_id: str | None,
-    limit: int,
+    limit: int | None = None,
     section: str | None = None,
     table: str = "chunks_fts",
 ) -> list[sqlite3.Row]:
@@ -134,8 +136,10 @@ def _fetch_candidates(
     if section:
         sql += " AND (c.heading_path = ? OR substr(c.heading_path, 1, length(?) + 3) = ? || ' → ')"
         params.extend([section, section, section])
-    sql += " ORDER BY rank LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY rank"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     return conn.execute(sql, params).fetchall()
 
 
@@ -194,6 +198,59 @@ def trim_to_window(text: str, tokens: list[str], window_tokens: int) -> str:
     return f"{prefix}{cut}{suffix}"
 
 
+def _page_snippets(
+    scored: list[tuple[float, sqlite3.Row]],
+    tokens: list[str],
+    *,
+    page: int,
+    token_budget: int,
+    max_results: int,
+    window_tokens: int,
+) -> tuple[list[Snippet], bool]:
+    """Assemble the requested page and report whether ranked matches remain.
+
+    Pages are continuations of the ranking: a candidate that does not fit the
+    remaining budget ends the current page and starts the next one with a
+    fresh budget, so budget filtering never silently drops chunks between
+    pages.
+    """
+    if max_results <= 0:
+        return [], bool(scored)
+    cursor = 0
+    snippets: list[Snippet] = []
+    for current_page in range(1, page + 1):
+        if current_page > 1 and cursor >= len(scored):
+            snippets = []
+            break
+        snippets = []
+        remaining = token_budget
+        while cursor < len(scored) and len(snippets) < max_results:
+            score, row = scored[cursor]
+            text = row["text"]
+            if window_tokens and row["token_est"] > window_tokens:
+                text = trim_to_window(text, tokens, window_tokens)
+            est = estimate_tokens(text)
+            if est > remaining:
+                if snippets:
+                    break
+                text = truncate_to_tokens(text, remaining)
+                est = estimate_tokens(text)
+            snippets.append(
+                Snippet(
+                    heading_path=row["heading_path"],
+                    source=row["rel_path"],
+                    text=text,
+                    score=round(score, 4),
+                    tokens=est,
+                )
+            )
+            cursor += 1
+            remaining -= est
+            if remaining <= 0:
+                break
+    return snippets, cursor < len(scored)
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -206,26 +263,19 @@ def search(
     section: str | None = None,
     window_tokens: int = 0,
 ) -> SearchResult:
+    page = max(page, 1)
     tokens = tokenize(query)
     result = SearchResult(query=query, page=page)
     if not tokens:
         return result
 
-    candidates = _fetch_candidates(
-        conn, _and_expression(tokens), library_id, max_results * 3 * page, section
-    )
+    candidates = _fetch_candidates(conn, _and_expression(tokens), library_id, section=section)
     if not candidates:
         candidates = _fetch_candidates(
-            conn,
-            _and_expression(tokens, prefix=True),
-            library_id,
-            max_results * 3 * page,
-            section,
+            conn, _and_expression(tokens, prefix=True), library_id, section=section
         )
     if not candidates:
-        candidates = _fetch_candidates(
-            conn, _or_expression(tokens), library_id, max_results * 3 * page, section
-        )
+        candidates = _fetch_candidates(conn, _or_expression(tokens), library_id, section=section)
     if not candidates:
         trigram_match = _tri_expression(tokens)
         if trigram_match:
@@ -233,8 +283,7 @@ def search(
                 conn,
                 trigram_match,
                 library_id,
-                max_results * 3 * page,
-                section,
+                section=section,
                 table="chunks_tri",
             )
 
@@ -247,29 +296,15 @@ def search(
         scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
 
-    remaining = token_budget
-    offset = (page - 1) * max_results
-    for score, row in scored[offset:]:
-        if len(result.snippets) >= max_results:
-            break
-        text = row["text"]
-        if window_tokens and row["token_est"] > window_tokens:
-            text = trim_to_window(text, tokens, window_tokens)
-        est = estimate_tokens(text)
-        if est > remaining and result.snippets:
-            continue
-        if est > remaining:
-            text = truncate_to_tokens(text, remaining)
-            est = estimate_tokens(text)
-        snippet = Snippet(
-            heading_path=row["heading_path"],
-            source=row["rel_path"],
-            text=text,
-            score=round(score, 4),
-            tokens=est,
-        )
-        result.snippets.append(snippet)
-        remaining -= snippet.tokens
+    result.total_matches = len(scored)
+    result.snippets, result.has_more = _page_snippets(
+        scored,
+        tokens,
+        page=page,
+        token_budget=token_budget,
+        max_results=max_results,
+        window_tokens=window_tokens,
+    )
     result.total_tokens = sum(s.tokens for s in result.snippets)
     return result
 

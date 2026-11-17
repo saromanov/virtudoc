@@ -148,6 +148,60 @@ async def test_mcp_get_library_docs_budget(home_index):
 
 
 @pytest.mark.anyio
+async def test_mcp_pagination_metadata(home, tmp_path):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text("[search]\nmax_results = 2\n", encoding="utf-8")
+    docs = tmp_path / "manydocs"
+    docs.mkdir()
+    for index in range(7):
+        (docs / f"doc{index}.md").write_text(
+            f"# Раздел {index}\n\npaginationmarker уникальный текст {index}.\n",
+            encoding="utf-8",
+        )
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs, "many")
+        index_library(conn, lib_id, Chunker())
+
+    async with stdio_client(_server_params(home)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            seen: set[str] = set()
+            for page in range(1, 20):
+                result = await session.call_tool(
+                    "get-library-docs",
+                    {
+                        "libraryId": "local/many",
+                        "query": "paginationmarker",
+                        "page": page,
+                    },
+                )
+                assert not _is_error(result)
+                payload = _payload(result)
+                assert payload["page"] == page
+                assert payload["total_matches"] == 7
+                texts = {snippet["text"] for snippet in payload["snippets"]}
+                assert seen.isdisjoint(texts)
+                seen.update(texts)
+                if not payload["has_more"]:
+                    break
+            assert len(seen) == 7
+
+            beyond = await session.call_tool(
+                "get-library-docs",
+                {
+                    "libraryId": "local/many",
+                    "query": "paginationmarker",
+                    "page": 5,
+                },
+            )
+            payload = _payload(beyond)
+            assert payload["snippets"] == []
+            assert payload["total_matches"] == 7
+            assert payload["has_more"] is False
+            assert "no fragments on page 5" in payload["message"]
+
+
+@pytest.mark.anyio
 async def test_mcp_unknown_library_is_structured_error(home_index):
     async with stdio_client(_server_params(home_index)) as (read, write):
         async with ClientSession(read, write) as session:

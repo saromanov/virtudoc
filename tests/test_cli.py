@@ -100,6 +100,34 @@ def test_search_unknown_library(home, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_search_pagination_metadata(home, tmp_path, capsys):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text("[search]\nmax_results = 2\n", encoding="utf-8")
+    docs = tmp_path / "manydocs"
+    docs.mkdir()
+    for index in range(7):
+        (docs / f"doc{index}.md").write_text(
+            f"# Раздел {index}\n\npaginationmarker уникальный текст {index}.\n",
+            encoding="utf-8",
+        )
+    assert main(["add", str(docs), "--name", "many"]) == 0
+    capsys.readouterr()
+
+    assert main(["search", "paginationmarker", "--page", "1"]) == 0
+    first = capsys.readouterr().out
+    assert "fragments: 2, total_matches: 7, has_more: true" in first
+    assert "next page: 2" in first
+
+    assert main(["search", "paginationmarker", "--page", "4"]) == 0
+    last = capsys.readouterr().out
+    assert "fragments: 1, total_matches: 7, has_more: false" in last
+
+    assert main(["search", "paginationmarker", "--page", "5"]) == 0
+    beyond = capsys.readouterr().out
+    assert "no fragments on page 5" in beyond
+    assert "total_matches: 7" in beyond
+
+
 def test_serve_help(home, capsys):
     with pytest.raises(SystemExit) as exc_info:
         main(["serve", "--help"])

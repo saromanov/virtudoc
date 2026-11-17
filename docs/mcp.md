@@ -154,10 +154,18 @@ Fragments mode returns:
     }
   ],
   "notes": [{ "id": 1, "text": "...", "created_at": "..." }],
-  "total_tokens": 420
+  "total_tokens": 420,
+  "total_matches": 57,
+  "has_more": true
 }
 ```
 
+- `total_matches` is the number of ranked matches for the query and does
+  not depend on the page. `has_more` tells whether `page + 1` has
+  fragments; a page continues with the first fragment that did not fit
+  the previous page's token budget, so budget filtering does not skip
+  chunks. Requesting a page past the end returns empty `snippets` with
+  the same `total_matches`.
 - When docs and project versions diverge (see
   [Version drift](versions.md)), the output starts with a
   `version_mismatch` block naming both versions and the manifest.

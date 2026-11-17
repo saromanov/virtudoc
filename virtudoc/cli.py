@@ -197,6 +197,7 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             library_id=library_id,
             token_budget=args.tokens or cfg.get_int("search.default_tokens"),
             max_results=cfg.get_int("search.max_results"),
+            page=args.page,
             section=args.section,
             window_tokens=cfg.get_int("search.snippet_window_tokens"),
         )
@@ -213,13 +214,24 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
         for note in notes:
             print(f"[note #{note.id} | {note.created_at}]\n{note.text}\n")
     if not result.snippets:
-        print("nothing found; try rephrasing the query with keywords")
+        if result.total_matches:
+            print(
+                f"no fragments on page {result.page}; total_matches: {result.total_matches}, "
+                f"has_more: {str(result.has_more).lower()}"
+            )
+        else:
+            print("nothing found; try rephrasing the query with keywords")
         return 0
     for snippet in result.snippets:
         heading = snippet.heading_path or "(no section)"
         print(f"\n## [{snippet.score:.2f}] {heading} — {snippet.source} (~{snippet.tokens} tokens)")
         print(snippet.text)
-    print(f"\n---\nfragments: {result.total_chunks}, tokens: {result.total_tokens}")
+    print(
+        f"\n---\nfragments: {result.page_chunks}, total_matches: {result.total_matches}, "
+        f"has_more: {str(result.has_more).lower()}, tokens: {result.total_tokens}"
+    )
+    if result.has_more:
+        print(f"next page: {result.page + 1}")
     return 0
 
 
@@ -505,6 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", help="search query")
     p.add_argument("--name", help="restrict the search to one library")
     p.add_argument("--tokens", type=int, help="token budget for the output")
+    p.add_argument("--page", type=int, default=1, help="page of the ranked results (default: 1)")
     p.add_argument(
         "--section", help="restrict the output to a section branch (e.g. 'API -> Middleware')"
     )
