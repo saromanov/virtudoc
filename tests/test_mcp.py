@@ -213,8 +213,35 @@ async def test_mcp_unknown_library_is_structured_error(home_index):
             assert "library not found" in result.content[0].text
 
 
+def test_serve_startup_does_not_index_libraries(home, docs_dir):
+    import virtudoc.mcp_server as mcp_server_module
+
+    with open_db(Config().db_path) as conn:
+        add_library(conn, docs_dir, "demo")
+    mcp_server_module.prepare_serve(Config())
+    with open_db(Config().db_path) as conn:
+        documents = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    assert documents == 0, "startup must not walk and index sources"
+    assert mcp_server_module.build_server(Config()) is not None
+
+
 @pytest.mark.anyio
-async def test_mcp_reindex_on_start_serves_fresh_content(home, docs_dir):
+async def test_mcp_indexes_library_only_on_first_request(home, docs_dir):
+    with open_db(Config().db_path) as conn:
+        add_library(conn, docs_dir, "demo")
+    async with stdio_client(_server_params(home)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": "local/demo", "query": "middleware"},
+            )
+            payload = _payload(result)
+            assert payload["snippets"]
+
+
+@pytest.mark.anyio
+async def test_mcp_refreshes_changed_library_on_request(home, docs_dir):
     with open_db(Config().db_path) as conn:
         lib_id = add_library(conn, docs_dir, "demo")
         index_library(conn, lib_id, Chunker())
@@ -419,7 +446,7 @@ def test_http_authentication_configuration(home, monkeypatch, host, token, expec
     import virtudoc.mcp_server as mcp_server_module
 
     monkeypatch.delenv("VIRTUDOC_HTTP_TOKEN", raising=False)
-    monkeypatch.setattr(mcp_server_module, "reindex_before_serve", lambda config: None)
+    monkeypatch.setattr(mcp_server_module, "prepare_serve", lambda config: None)
     monkeypatch.setattr(mcp_server_module, "build_server", lambda config: object())
     captured = {}
 

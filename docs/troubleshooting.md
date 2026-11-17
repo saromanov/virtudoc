@@ -70,7 +70,7 @@ document with the current settings.
 ## `update` fails with `IndexLockError`
 
 **Cause:** another indexing operation is running (a second `add`/`update`,
-or `serve` is reindexing on startup).
+or `serve` is refreshing a library on request).
 
 **Fix:** wait for it to finish and retry; avoid running index commands
 concurrently.
@@ -97,9 +97,9 @@ sections — or inspect the tree upfront with
 
 ## The agent does not see my latest edits
 
-Indexing happens when `serve` starts, and `get-library-docs` refreshes a
-library automatically when its source is newer than the index
-(`index.auto_refresh`). If you still see stale data: check that the edit
+Indexing happens on the first `get-library-docs` call for a library, when
+its source is newer than the index (`index.auto_refresh`). Startup does not
+index. If you still see stale data: check that the edit
 is saved, that the server uses the same data directory (see the first
 section), and run `virtudoc update` to force an immediate refresh.
 

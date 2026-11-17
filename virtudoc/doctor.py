@@ -49,7 +49,7 @@ def _warn_unstable_source(result: CheckResult, lib_id: str, source: Path) -> Non
     if pinned and branch != pinned:
         result.warn(
             f"{lib_id}: fetch cache pinned to branch '{pinned}' but the checkout "
-            f"is on '{branch}' — serve resets it locally before reindexing"
+            f"is on '{branch}' — serve resets it locally before serving"
         )
     default = git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
     if default and not (pinned and branch == pinned):

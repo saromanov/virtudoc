@@ -133,7 +133,7 @@ database schema is versioned.
 
 - **M1 (done):** core — indexing, chunking, FTS5 search, CLI.
 - **M2:** MCP server `serve` (stdio), `find-library` /
-  `get-library-docs` tools, reindex-on-start, Claude Code/Cursor integration.
+  `get-library-docs` tools, lazy refresh on request, Claude Code/Cursor integration.
 - **M3:** retrieval quality — adjacent-chunk merging, pagination, code-share
   control, notes block, version-mismatch warnings, outline mode, a control
   query set.

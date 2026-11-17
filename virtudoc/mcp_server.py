@@ -18,7 +18,7 @@ from .config import Config, data_dir
 from .db import open_db
 from .fetcher import ensure_pinned_checkout
 from .indexer.chunker import Chunker
-from .indexer.indexer import index_library, refresh_if_stale
+from .indexer.indexer import refresh_if_stale
 from .logging_setup import get_logger
 from .notes import relevant_notes
 from .search.engine import library_outline, resolve_libraries, search, top_level_sections
@@ -202,30 +202,26 @@ def build_server(config: Config) -> MCPServer:
     return server
 
 
-def reindex_before_serve(config: Config) -> None:
-    chunker = Chunker(
-        target_tokens=config.get_int("chunk.target_tokens"),
-        max_tokens=config.get_int("chunk.max_tokens"),
-        overlap_tokens=config.get_int("chunk.overlap_tokens"),
-    )
+def prepare_serve(config: Config) -> None:
+    """Reset pinned fetch caches before the transport starts.
+
+    Startup must stay cheap on large corpora: no source is walked or
+    hashed here. `get-library-docs` refreshes the requested library
+    through `refresh_if_stale` instead.
+    """
     with open_db(config.db_path) as conn:
         rows = conn.execute("SELECT id, source_path FROM libraries ORDER BY id").fetchall()
-        for row in rows:
-            source = Path(row["source_path"])
-            if (source / ".git").is_dir():
-                pinned = ensure_pinned_checkout(source)
-                if pinned:
-                    logger.info(
-                        "fetch cache for %s pinned to branch '%s' (reset locally, offline)",
-                        row["id"],
-                        pinned,
-                    )
-            try:
-                stats = index_library(conn, row["id"], chunker)
-            except Exception as exc:  # serve must start regardless
-                logger.error("reindex failed for %s: %s", row["id"], exc)
-            else:
-                logger.info("reindexed %s on serve start: %s", row["id"], stats.summary())
+    for row in rows:
+        source = Path(row["source_path"])
+        if not (source / ".git").is_dir():
+            continue
+        pinned = ensure_pinned_checkout(source)
+        if pinned:
+            logger.info(
+                "fetch cache for %s pinned to branch '%s' (reset locally, offline)",
+                row["id"],
+                pinned,
+            )
 
 
 class BearerAuthMiddleware:
@@ -302,7 +298,7 @@ def run_serve(config: Config, *, http: bool | int = False) -> int:
             file=sys.stderr,
         )
         return 1
-    reindex_before_serve(config)
+    prepare_serve(config)
     server = build_server(config)
     if http:
         port = config.get_int("server.http_port") if http is True else int(http)

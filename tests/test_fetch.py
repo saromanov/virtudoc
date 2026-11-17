@@ -289,7 +289,7 @@ def test_ensure_pinned_checkout_leaves_dirty_tree(home, tmp_path):
     assert (dest / "work.md").exists()
 
 
-def test_reindex_before_serve_resets_to_pinned_branch(home, tmp_path):
+def test_prepare_serve_resets_to_pinned_branch(home, tmp_path):
     if shutil.which("git") is None:
         pytest.skip("git not available")
     import virtudoc.mcp_server as mcp_server_module
@@ -304,7 +304,7 @@ def test_reindex_before_serve_resets_to_pinned_branch(home, tmp_path):
     )
     with open_db(Config().db_path) as conn:
         add_library(conn, cache_path("servelib"), "servelib")
-    mcp_server_module.reindex_before_serve(Config())
+    mcp_server_module.prepare_serve(Config())
     head = subprocess.run(
         ["git", "-C", cache_path("servelib"), "symbolic-ref", "--short", "HEAD"],
         capture_output=True,

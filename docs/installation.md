@@ -84,7 +84,7 @@ rest.
 
 Then connect your agent once (see [MCP integration](mcp.md)) — done. From
 here on, every agent session reindexes changed documentation automatically
-when the server starts; the setup file is the only thing to keep in sync.
+on the first request for a library; the setup file is the only thing to keep in sync.
 
 A typical update loop: `virtudoc add ...` (or `remove`) → `virtudoc export`
 → commit the setup file. Colleagues get the change with their next pull and

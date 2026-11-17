@@ -12,8 +12,8 @@ Private and internal documentation never leaves your computer.
 
 - Answers from **your** documentation: internal SDKs, proprietary
   integrations, team conventions — things no cloud service can know.
-- Fresh results: the index is rebuilt incrementally every time the server
-  starts.
+- Fresh results: the requested library is refreshed incrementally when the
+  server first needs it.
 - Context economy: the agent pulls exactly the fragments it needs under a
   token budget instead of receiving whole files.
 - Team knowledge: project notes are delivered together with documentation.
