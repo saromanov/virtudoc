@@ -191,11 +191,15 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             )
             _print_outline(tree)
             return 0
+        budget = args.tokens or cfg.get_int("search.default_tokens")
+        if budget <= 0:
+            print("error: token budget must be a positive number", file=sys.stderr)
+            return 1
         result = search(
             conn,
             args.query,
             library_id=library_id,
-            token_budget=args.tokens or cfg.get_int("search.default_tokens"),
+            token_budget=budget,
             max_results=cfg.get_int("search.max_results"),
             page=args.page,
             section=args.section,
@@ -448,6 +452,10 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
     imported, failed = 0, 0
     with _open(cfg) as conn:
         for lib in libraries:
+            if not isinstance(lib, dict):
+                print(f"error: malformed entry: {lib!r}", file=sys.stderr)
+                failed += 1
+                continue
             name = str(lib.get("name", ""))
             source = lib.get("path")
             if not name or not source:

@@ -151,8 +151,9 @@ def build_server(config: Config) -> MCPServer:
                 section=section,
                 window_tokens=config.get_int("search.snippet_window_tokens"),
             )
+            warning = mismatch_payload(conn, libraryId)
             if not result.snippets and not result.total_matches:
-                return {
+                payload = {
                     "library_id": libraryId,
                     "query": query,
                     "page": result.page,
@@ -174,6 +175,7 @@ def build_server(config: Config) -> MCPServer:
                         for hint in top_level_sections(conn, libraryId)
                     ],
                 }
+                return {"version_mismatch": warning, **payload} if warning else payload
             payload = {
                 "library_id": libraryId,
                 "query": query,
@@ -196,7 +198,6 @@ def build_server(config: Config) -> MCPServer:
                 payload["message"] = (
                     f"no fragments on page {result.page}; total_matches: {result.total_matches}"
                 )
-            warning = mismatch_payload(conn, libraryId)
             return {"version_mismatch": warning, **payload} if warning else payload
 
     return server

@@ -100,6 +100,13 @@ def test_search_unknown_library(home, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+def test_search_rejects_non_positive_token_budget(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+    assert main(["search", "middleware", "--tokens", "-5"]) == 1
+    assert "token budget must be a positive number" in capsys.readouterr().err
+
+
 def test_search_pagination_metadata(home, tmp_path, capsys):
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text("[search]\nmax_results = 2\n", encoding="utf-8")
@@ -275,6 +282,22 @@ def test_import_missing_source_fails_cleanly(home, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "failed: 1" in captured.out
     assert "source directory not found" in captured.err
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[libraries]\ndemo = "x"\n',
+        'libraries = ["demo"]\n',
+    ],
+)
+def test_import_reports_malformed_entries(home, tmp_path, capsys, content):
+    setup = tmp_path / "setup.toml"
+    setup.write_text(content, encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "failed: 1" in captured.out
+    assert "malformed entry" in captured.err
 
 
 def test_import_default_path(home, docs_dir, capsys):

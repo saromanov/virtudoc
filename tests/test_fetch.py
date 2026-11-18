@@ -51,6 +51,17 @@ def test_fetch_from_tarball(home, tmp_path):
     assert (cache_path("tarlib") / "a.md").is_file()
 
 
+def test_fetch_tarball_with_dot_root_entry(home, tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.md").write_text("# A\n\nТекст.\n", encoding="utf-8")
+    archive = tmp_path / "dot-root.tar"
+    with tarfile.open(archive, "w") as tf:
+        tf.add(source, arcname=".")
+    assert main(["fetch", "--repo", archive.as_uri(), "--name", "dotroot"]) == 0
+    assert (cache_path("dotroot") / "a.md").is_file()
+
+
 def test_fetch_rejects_zip_slip(home, tmp_path):
     archive = tmp_path / "evil.zip"
     with zipfile.ZipFile(archive, "w") as zf:

@@ -146,6 +146,11 @@ def _member_target(dest: Path, name: str) -> Path:
     return target
 
 
+def _is_root_dir(name: str) -> bool:
+    """True for the archive root entry that tools write as "." or "./"."""
+    return name.replace("\\", "/").strip("/") in ("", ".")
+
+
 def _copy_member(source, target: Path, total: int, max_bytes: int) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("xb") as output:
@@ -170,6 +175,8 @@ def _safe_extract_zip(
     total = 0
     files = 0
     for member in members:
+        if member.is_dir() and _is_root_dir(member.filename):
+            continue
         if (member.external_attr >> 16) & 0o170000 == 0o120000:
             raise FetchError(f"unsafe path in archive: {member.filename!r}")
         _member_target(dest, member.filename)
@@ -182,6 +189,8 @@ def _safe_extract_zip(
     total = 0
     files = 0
     for member in members:
+        if member.is_dir() and _is_root_dir(member.filename):
+            continue
         target = _member_target(dest, member.filename)
         if member.is_dir():
             target.mkdir(parents=True, exist_ok=True)
@@ -203,6 +212,8 @@ def _safe_extract_tar(
     total = 0
     files = 0
     for member in members:
+        if member.isdir() and _is_root_dir(member.name):
+            continue
         if not member.isfile() and not member.isdir():
             raise FetchError(f"unsafe member in archive: {member.name!r}")
         _member_target(dest, member.name)
@@ -215,6 +226,8 @@ def _safe_extract_tar(
     total = 0
     files = 0
     for member in members:
+        if member.isdir() and _is_root_dir(member.name):
+            continue
         target = _member_target(dest, member.name)
         if member.isdir():
             target.mkdir(parents=True, exist_ok=True)

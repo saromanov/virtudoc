@@ -15,6 +15,7 @@ from ..tokens import (
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_SECTION_ARROW_RE = re.compile(r"\s*(?:→|->)\s*")
 
 TOPIC_BONUS = 0.25
 LANGUAGE_BONUS = 0.15
@@ -168,6 +169,19 @@ def _fetch_candidates(
     return conn.execute(sql, params).fetchall()
 
 
+def normalize_section(section: str | None) -> str | None:
+    """Normalize a section argument to the stored heading separator `` → ``.
+
+    Heading paths are stored with a Unicode arrow ("API → Middleware"), but
+    the docs and the MCP tool description show the ASCII form
+    ("API -> Middleware"), so agents and users paste either one.
+    """
+    if not section or not section.strip():
+        return None
+    parts = [part for part in _SECTION_ARROW_RE.split(section.strip()) if part]
+    return " → ".join(parts) or None
+
+
 def _topic_tokens(row: sqlite3.Row) -> set[str]:
     """Word tokens of the chunk's heading path and file name.
 
@@ -259,7 +273,8 @@ def _page_snippets(
     pages.
     """
     if max_results <= 0:
-        return [], bool(scored)
+        # No page can contain fragments, so no page continues the ranking.
+        return [], False
     cursor = 0
     snippets: list[Snippet] = []
     for current_page in range(1, page + 1):
@@ -309,6 +324,7 @@ def search(
 ) -> SearchResult:
     page = max(page, 1)
     tokens = tokenize(query)
+    section = normalize_section(section)
     result = SearchResult(query=query, page=page)
     if not tokens:
         return result
@@ -476,6 +492,7 @@ def library_outline(
     *,
     section: str | None = None,
 ) -> list[OutlineNode]:
+    section = normalize_section(section)
     rows = conn.execute(
         """
         SELECT heading_path, COUNT(*), COALESCE(SUM(token_est), 0)

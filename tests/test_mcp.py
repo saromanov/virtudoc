@@ -379,6 +379,29 @@ async def test_mcp_empty_search_returns_section_hints(home_index):
 
 
 @pytest.mark.anyio
+async def test_mcp_empty_search_keeps_version_mismatch(home, docs_dir, tmp_path):
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs_dir, "demo", version="1.0")
+        index_library(conn, lib_id, Chunker())
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "requirements.txt").write_text("demo==2.0.0\n", encoding="utf-8")
+        from virtudoc.versions import link_library
+
+        link_library(conn, lib_id, project)
+    async with stdio_client(_server_params(home)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": "local/demo", "query": "zizigaura абракадабра"},
+            )
+            payload = _payload(result)
+            assert payload["snippets"] == []
+            assert payload["version_mismatch"]["project_version"] == "2.0.0"
+
+
+@pytest.mark.anyio
 async def test_mcp_refreshes_stale_library_on_tool_call(home, docs_dir):
     import virtudoc.mcp_server as mcp_server_module
 

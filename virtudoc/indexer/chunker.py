@@ -33,7 +33,9 @@ def _split_oversized(text: str, max_tokens: int) -> list[str]:
     final: list[str] = []
     for part in parts:
         while estimate_tokens(part) > max_tokens:
-            budget = max_tokens * 3
+            # A non-positive limit would make the slice empty and loop
+            # forever on a misconfigured chunk.max_tokens.
+            budget = max(max_tokens * 3, 1)
             final.append(part[:budget])
             part = part[budget:]
         final.append(part)
