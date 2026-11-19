@@ -14,7 +14,7 @@ def fts_normalize(text: str) -> str:
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def connect(path: Path | str) -> sqlite3.Connection:

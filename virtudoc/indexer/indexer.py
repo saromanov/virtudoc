@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -49,6 +50,43 @@ class IndexStats:
 
 def library_id(name: str) -> str:
     return f"local/{name}"
+
+
+_FAILURES_META_PREFIX = "index_failures:"
+
+
+def _failure_key(lib_id: str) -> str:
+    return f"{_FAILURES_META_PREFIX}{lib_id}"
+
+
+def load_index_failures(conn: sqlite3.Connection, lib_id: str) -> set[str]:
+    """Files whose last indexing attempt failed to read or parse."""
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (_failure_key(lib_id),)).fetchone()
+    if row is None:
+        return set()
+    try:
+        data = json.loads(row[0])
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(data, list):
+        return set()
+    return {str(item) for item in data}
+
+
+def _store_index_failures(conn: sqlite3.Connection, lib_id: str, failures: set[str]) -> None:
+    key = _failure_key(lib_id)
+    if failures:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (key, json.dumps(sorted(failures))),
+        )
+    else:
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+
+
+def _drop_document(conn: sqlite3.Connection, document_id: int) -> None:
+    delete_document_chunks(conn, document_id)
+    conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
 
 def validate_name(name: str) -> None:
@@ -131,6 +169,7 @@ def delete_library(conn: sqlite3.Connection, name: str) -> None:
         (lib_id,),
     )
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
+    conn.execute("DELETE FROM meta WHERE key = ?", (_failure_key(lib_id),))
     conn.commit()
     logger.info("deleted library %s", lib_id)
 
@@ -184,21 +223,25 @@ def _index_library(
         logger.warning("file over 5 MB, skipped: %s", rel_path)
 
     seen: set[str] = set()
+    failures: set[str] = set()
     for walked_file in walked.files:
         stats.processed += 1
         rel_path = walked_file.rel_path
         seen.add(rel_path)
-        try:
-            content = walked_file.path.read_bytes()
-        except OSError as exc:
-            stats.errors += 1
-            logger.error("failed to read %s: %s", rel_path, exc)
-            continue
-        digest = hashlib.sha1(content).hexdigest()
         doc_row = conn.execute(
             "SELECT id, content_hash FROM documents WHERE library_id = ? AND rel_path = ?",
             (lib_id, rel_path),
         ).fetchone()
+        try:
+            content = walked_file.path.read_bytes()
+        except OSError as exc:
+            stats.errors += 1
+            failures.add(rel_path)
+            logger.error("failed to read %s: %s", rel_path, exc)
+            if doc_row:
+                _drop_document(conn, doc_row["id"])
+            continue
+        digest = hashlib.sha1(content).hexdigest()
         if doc_row and doc_row["content_hash"] == digest:
             stats.skipped += 1
             continue
@@ -208,7 +251,12 @@ def _index_library(
             chunks = chunker.chunk(parsed)
         except (ParseError, ValueError, UnicodeError) as exc:
             stats.errors += 1
+            failures.add(rel_path)
             logger.error("parse error in %s: %s", rel_path, exc)
+            if doc_row:
+                # Never keep serving the previous revision of a file that
+                # no longer parses; the failure is reported by doctor.
+                _drop_document(conn, doc_row["id"])
             continue
         if doc_row:
             delete_document_chunks(conn, doc_row["id"])
@@ -245,11 +293,12 @@ def _index_library(
     ).fetchall()
     for doc in stale:
         if doc["rel_path"] not in seen:
-            delete_document_chunks(conn, doc["id"])
-            conn.execute("DELETE FROM documents WHERE id = ?", (doc["id"],))
+            _drop_document(conn, doc["id"])
             stats.removed += 1
             logger.debug("removed from index: %s", doc["rel_path"])
 
+    failures &= seen
+    _store_index_failures(conn, lib_id, failures)
     conn.execute("UPDATE libraries SET updated_at = ? WHERE id = ?", (utc_now(), lib_id))
     return stats
 
@@ -350,12 +399,12 @@ def refresh_if_stale(
     except (TypeError, ValueError):
         indexed_ts = 0.0
     walked: WalkResult = walk_source(source)
-    if (
-        len(walked.files)
-        != conn.execute(
-            "SELECT COUNT(*) FROM documents WHERE library_id = ?", (lib_id,)
-        ).fetchone()[0]
-    ):
+    walked_paths = {walked_file.rel_path for walked_file in walked.files}
+    failed_now = load_index_failures(conn, lib_id) & walked_paths
+    document_count = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE library_id = ?", (lib_id,)
+    ).fetchone()[0]
+    if len(walked.files) != document_count + len(failed_now):
         return _safe_index(conn, lib_id, chunker)
     latest = max((f.path.stat().st_mtime for f in walked.files if f.path.exists()), default=0.0)
     if latest > indexed_ts:

@@ -228,3 +228,38 @@ def test_doctor_skips_git_checks_without_git(conn, docs_dir, tmp_path, monkeypat
     result = doctor_module.run_doctor(conn, _doctor_config(tmp_path))
     assert any("source present" in line for line in result.lines)
     assert not any("git checkout" in line for line in result.lines)
+
+
+def test_doctor_reports_files_that_failed_indexing(conn, docs_dir, tmp_path, monkeypatch):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.indexer.parsers import ParseError
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    monkeypatch.setattr(
+        indexer_module,
+        "parse_file",
+        lambda path, text: (_ for _ in ()).throw(ParseError("broken")),
+    )
+    index_library(conn, lib_id, Chunker())
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("files failed to index" in line for line in result.lines)
+
+
+def test_doctor_truncates_long_failure_list(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        ("index_failures:local/demo", '["a.md", "b.md", "c.md", "d.md", "e.md"]'),
+    )
+    conn.commit()
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    line = next(line for line in result.lines if "files failed to index" in line)
+    assert "a.md, b.md, c.md, ... (2 more)" in line

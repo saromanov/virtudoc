@@ -375,3 +375,119 @@ def test_refresh_if_stale_skips_when_lock_is_held(conn, docs_dir, monkeypatch):
     monkeypatch.setattr(indexer_module, "index_library", locked)
     assert refresh_if_stale(conn, lib_id, Chunker()) is None
     assert indexer_module._safe_index(conn, lib_id, Chunker()) is None
+
+
+def test_parse_failure_drops_stale_document_and_stops_refresh_loop(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.indexer import load_index_failures
+    from virtudoc.indexer.parsers import ParseError
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    (docs_dir / "api.md").write_text("# Broken revision\n\nnow invalid\n", encoding="utf-8")
+
+    def fail_parse(path, text):
+        raise ParseError("broken")
+
+    monkeypatch.setattr(indexer_module, "parse_file", fail_parse)
+    stats = index_library(conn, lib_id, Chunker())
+
+    assert stats.errors == 1
+    assert load_index_failures(conn, lib_id) == {"api.md"}
+    paths = {row[0] for row in conn.execute("SELECT rel_path FROM documents")}
+    assert "api.md" not in paths, "stale content must not stay searchable"
+    chunks = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE heading_path LIKE '%Broken revision%'"
+    ).fetchone()[0]
+    assert chunks == 0
+    # 3 walked files == 2 documents + 1 recorded failure: no reindex loop.
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None
+
+
+def test_successful_reindex_clears_failure_record(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.indexer import load_index_failures
+    from virtudoc.indexer.parsers import ParseError
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    (docs_dir / "api.md").write_text("# Fixed later\n\nbody\n", encoding="utf-8")
+
+    original = indexer_module.parse_file
+
+    def fail_parse(path, text):
+        raise ParseError("broken")
+
+    monkeypatch.setattr(indexer_module, "parse_file", fail_parse)
+    index_library(conn, lib_id, Chunker())
+    assert load_index_failures(conn, lib_id) == {"api.md"}
+
+    monkeypatch.setattr(indexer_module, "parse_file", original)
+    index_library(conn, lib_id, Chunker())
+    assert load_index_failures(conn, lib_id) == set()
+
+
+def test_unreadable_file_is_recorded_as_failure(conn, tmp_path, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.indexer import load_index_failures
+    from virtudoc.indexer.walker import WalkedFile, WalkResult
+
+    lib_id = add_library(conn, tmp_path, "demo")
+    missing = tmp_path / "missing.md"
+    monkeypatch.setattr(
+        indexer_module,
+        "walk_source",
+        lambda source: WalkResult(files=[WalkedFile(path=missing, rel_path="missing.md")]),
+    )
+    index_library(conn, lib_id, Chunker())
+    assert load_index_failures(conn, lib_id) == {"missing.md"}
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None
+
+
+def test_delete_library_removes_failure_record(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.parsers import ParseError
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    monkeypatch.setattr(
+        indexer_module,
+        "parse_file",
+        lambda path, text: (_ for _ in ()).throw(ParseError("broken")),
+    )
+    index_library(conn, lib_id, Chunker())
+    delete_library(conn, "demo")
+    keys = conn.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'index_failures:%'").fetchone()[0]
+    assert keys == 0
+
+
+def test_load_index_failures_ignores_malformed_meta(conn):
+    from virtudoc.indexer.indexer import load_index_failures
+
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('index_failures:local/demo', 'not-json')"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value)"
+        " VALUES ('index_failures:local/other', '{\"a\": 1}')"
+    )
+    conn.commit()
+    assert load_index_failures(conn, "local/demo") == set()
+    assert load_index_failures(conn, "local/other") == set()
+
+
+def test_read_failure_drops_previously_indexed_document(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.walker import WalkedFile, WalkResult
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    missing = docs_dir / "missing.md"
+    monkeypatch.setattr(
+        indexer_module,
+        "walk_source",
+        lambda source: WalkResult(files=[WalkedFile(path=missing, rel_path="guide.md")]),
+    )
+    stats = index_library(conn, lib_id, Chunker())
+    assert stats.errors == 1
+    paths = {row[0] for row in conn.execute("SELECT rel_path FROM documents")}
+    assert "guide.md" not in paths

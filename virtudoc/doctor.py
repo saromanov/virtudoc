@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import Config, data_dir
 from .fetcher import PIN_FILE, read_pinned_branch
+from .indexer.indexer import load_index_failures
 from .versions import extract_dep_version, version_status
 
 
@@ -102,6 +103,12 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 f"{lib['chunk_count']} chunks, {lib['note_count']} notes, "
                 f"docs version: {lib['version'] or 'unknown'}"
             )
+            failures = load_index_failures(conn, lib["id"])
+            if failures:
+                shown = ", ".join(sorted(failures)[:3])
+                if len(failures) > 3:
+                    shown += f", ... ({len(failures) - 3} more)"
+                result.warn(f"{lib['id']}: files failed to index: {shown}")
             _warn_unstable_source(result, lib["id"], source)
         else:
             result.warn(f"{lib['id']}: source directory missing: {source}")
