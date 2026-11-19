@@ -259,7 +259,7 @@ def _page_snippets(
     pages.
     """
     if max_results <= 0:
-        return [], bool(scored)
+        return [], False
     cursor = 0
     snippets: list[Snippet] = []
     for current_page in range(1, page + 1):

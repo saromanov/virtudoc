@@ -286,7 +286,7 @@ def test_search_zero_max_results_keeps_total_matches(indexed, conn):
     result = search(conn, "middleware", max_results=0)
     assert result.snippets == []
     assert result.total_matches > 0
-    assert result.has_more is True
+    assert result.has_more is False
 
 
 def test_resolve_libraries_on_empty_index(conn):
