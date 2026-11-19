@@ -463,9 +463,7 @@ def test_delete_library_removes_failure_record(conn, docs_dir, monkeypatch):
 def test_load_index_failures_ignores_malformed_meta(conn):
     from virtudoc.indexer.indexer import load_index_failures
 
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES ('index_failures:local/demo', 'not-json')"
-    )
+    conn.execute("INSERT INTO meta (key, value) VALUES ('index_failures:local/demo', 'not-json')")
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value)"
         " VALUES ('index_failures:local/other', '{\"a\": 1}')"
@@ -491,3 +489,37 @@ def test_read_failure_drops_previously_indexed_document(conn, docs_dir, monkeypa
     assert stats.errors == 1
     paths = {row[0] for row in conn.execute("SELECT rel_path FROM documents")}
     assert "guide.md" not in paths
+
+
+def test_reindex_rolls_back_on_failure(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    before = conn.execute(
+        "SELECT id, document_id, text FROM chunks WHERE library_id = ? ORDER BY id", (lib_id,)
+    ).fetchall()
+    documents_before = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    def fail_insert(*args, **kwargs):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(indexer_module, "insert_chunk", fail_insert)
+    with pytest.raises(RuntimeError, match="insert failed"):
+        reindex_library(conn, lib_id, Chunker())
+
+    after = conn.execute(
+        "SELECT id, document_id, text FROM chunks WHERE library_id = ? ORDER BY id", (lib_id,)
+    ).fetchall()
+    assert after == before, "a failed reindex must keep the previous index"
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == documents_before
+
+
+def test_clear_library_index_commits_by_default(conn, docs_dir):
+    from virtudoc.indexer.indexer import clear_library_index
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    clear_library_index(conn, lib_id, commit=True)
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
