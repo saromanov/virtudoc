@@ -1,6 +1,7 @@
 # VirtuDoc
 
 [![CI](https://github.com/saromanov/virtudoc/actions/workflows/ci.yml/badge.svg)](https://github.com/saromanov/virtudoc/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/saromanov/virtudoc/graph/badge.svg)](https://codecov.io/gh/saromanov/virtudoc/)
 [![PyPI](https://img.shields.io/pypi/v/virtudoc)](https://pypi.org/project/virtudoc/)
 [![Python versions](https://img.shields.io/pypi/pyversions/virtudoc)](https://pypi.org/project/virtudoc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/saromanov/virtudoc/blob/main/LICENSE)
