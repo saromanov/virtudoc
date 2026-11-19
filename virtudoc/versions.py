@@ -30,8 +30,12 @@ class VersionInfo:
     dep_version: str
 
 
+_PACKAGE_SEPARATORS = re.compile(r"[-_.]+")
+
+
 def normalize_name(name: str) -> str:
-    return name.strip().lower().replace("_", "-")
+    """PEP 503 normalization: dots, underscores and runs of hyphens are equal."""
+    return _PACKAGE_SEPARATORS.sub("-", name.strip().lower())
 
 
 def detect_manifest(project_path: Path) -> Path | None:

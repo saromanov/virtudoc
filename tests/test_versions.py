@@ -363,3 +363,12 @@ def test_link_with_missing_explicit_manifest(conn, docs_dir, tmp_path):
     project.mkdir()
     with pytest.raises(ValueError, match="dependency manifest not found"):
         link_library(conn, lib_id, project, manifest=project / "nope.toml")
+
+
+def test_normalize_name_follows_pep_503():
+    from virtudoc.versions import normalize_name
+
+    assert normalize_name(" Zope.Interface ") == "zope-interface"
+    assert normalize_name("Demo_Tool") == "demo-tool"
+    assert normalize_name("a..b") == "a-b"
+    assert normalize_name("@scope/pkg") == "@scope/pkg"
