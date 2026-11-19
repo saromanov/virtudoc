@@ -502,3 +502,24 @@ def test_cli_module_entrypoint(home, monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_module("virtudoc.cli", run_name="__main__")
     assert exc_info.value.code == 0
+
+
+def test_cli_closes_every_database_connection(home, monkeypatch):
+    import sqlite3
+
+    import virtudoc.cli as cli_module
+
+    real_open_db = cli_module.open_db
+    opened = []
+
+    def tracking_open_db(path):
+        connection = real_open_db(path)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(cli_module, "open_db", tracking_open_db)
+    assert main(["list"]) == 0
+    assert opened
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")

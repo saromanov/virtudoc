@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from .config import DATA_DIR_ENV, Config, data_dir
@@ -37,8 +39,10 @@ def _chunker_from_config(cfg: Config) -> Chunker:
     )
 
 
-def _open(cfg: Config):
-    return open_db(cfg.db_path)
+def _open(cfg: Config) -> closing[sqlite3.Connection]:
+    # The sqlite3 connection context manager only commits; closing() releases
+    # the connection so repeated CLI calls in one process do not leak handles.
+    return closing(open_db(cfg.db_path))
 
 
 def _print_skipped(skipped_files: list[str]) -> None:
