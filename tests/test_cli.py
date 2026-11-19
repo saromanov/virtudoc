@@ -539,3 +539,14 @@ def test_import_rejects_non_table_entries(home, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "entry is not a table" in captured.err
     assert "failed: 1" in captured.out
+
+
+def test_cli_reports_unsupported_sqlite(home, capsys, monkeypatch):
+    from virtudoc.db import UnsupportedSQLiteError
+
+    def broken(path):
+        raise UnsupportedSQLiteError("SQLite 3.35+ is required (found 3.31.1)")
+
+    monkeypatch.setattr("virtudoc.cli.open_db", broken)
+    assert main(["list"]) == 1
+    assert "SQLite 3.35+ is required" in capsys.readouterr().err

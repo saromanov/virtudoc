@@ -3,6 +3,7 @@
 ## Requirements
 
 - Python 3.11 or newer (3.11–3.14 are covered by CI)
+- SQLite 3.35 or newer (bundled with official Python builds)
 - Git — only for the `virtudoc fetch` command that clones remote docs
 - Any OS: Linux, macOS (Intel and Apple Silicon), Windows 10/11
 

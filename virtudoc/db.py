@@ -6,6 +6,9 @@ from pathlib import Path
 
 SCHEMA_VERSION = 3
 
+# RETURNING needs 3.35, the trigram tokenizer needs 3.34.
+MIN_SQLITE_VERSION = (3, 35, 0)
+
 _YO_MAP = str.maketrans({"ё": "е", "Ё": "Е"})
 
 
@@ -17,7 +20,22 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+class UnsupportedSQLiteError(RuntimeError):
+    pass
+
+
+def require_sqlite(version_info: tuple[int, ...] | None = None) -> None:
+    info = tuple(version_info or sqlite3.sqlite_version_info[:3])
+    if info < MIN_SQLITE_VERSION:
+        found = ".".join(str(part) for part in info)
+        raise UnsupportedSQLiteError(
+            f"SQLite {MIN_SQLITE_VERSION[0]}.{MIN_SQLITE_VERSION[1]}+ is required "
+            f"(found {found}); upgrade Python or link a newer SQLite library"
+        )
+
+
 def connect(path: Path | str) -> sqlite3.Connection:
+    require_sqlite()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)

@@ -9,7 +9,7 @@ from contextlib import closing
 from pathlib import Path
 
 from .config import DATA_DIR_ENV, Config, data_dir
-from .db import open_db
+from .db import UnsupportedSQLiteError, open_db
 from .doctor import run_doctor
 from .indexer.chunker import Chunker
 from .indexer.indexer import (
@@ -623,7 +623,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = Config.load()
     setup_logging(data_dir(), cfg.get_str("log.level"))
-    return int(args.func(args, cfg))
+    try:
+        return int(args.func(args, cfg))
+    except UnsupportedSQLiteError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

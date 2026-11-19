@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from virtudoc.db import (
     connect,
     delete_document_chunks,
@@ -225,3 +227,12 @@ def test_init_schema_recreates_a_missing_table(tmp_path):
     connection.commit()
     init_schema(connection)
     assert connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes'").fetchone()
+
+
+def test_require_sqlite_rejects_old_versions():
+    from virtudoc.db import UnsupportedSQLiteError, require_sqlite
+
+    require_sqlite((3, 35, 0))
+    require_sqlite((3, 46, 1))
+    with pytest.raises(UnsupportedSQLiteError, match=r"SQLite 3\.35"):
+        require_sqlite((3, 34, 9))
