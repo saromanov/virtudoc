@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -10,6 +11,8 @@ from .config import Config, data_dir
 from .fetcher import PIN_FILE, read_pinned_branch
 from .indexer.indexer import load_index_failures
 from .versions import extract_dep_version, version_status
+
+GIT_TIMEOUT = 10
 
 
 @dataclass
@@ -34,11 +37,17 @@ def _warn_unstable_source(result: CheckResult, lib_id: str, source: Path) -> Non
         return
 
     def git(*args: str) -> str | None:
-        proc = subprocess.run(
-            ["git", "-C", str(source), *args],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(source), *args],
+                capture_output=True,
+                text=True,
+                timeout=GIT_TIMEOUT,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # Doctor must never hang on a network filesystem or a prompt.
+            return None
         return proc.stdout.strip() if proc.returncode == 0 else None
 
     branch = git("symbolic-ref", "--short", "-q", "HEAD")

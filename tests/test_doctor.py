@@ -263,3 +263,22 @@ def test_doctor_truncates_long_failure_list(conn, docs_dir, tmp_path):
     result = run_doctor(conn, _doctor_config(tmp_path))
     line = next(line for line in result.lines if "files failed to index" in line)
     assert "a.md, b.md, c.md, ... (2 more)" in line
+
+
+def test_doctor_git_checks_have_a_timeout(tmp_path, monkeypatch):
+    import subprocess
+
+    import virtudoc.doctor as doctor_module
+
+    source = tmp_path / "repo"
+    (source / ".git").mkdir(parents=True)
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=doctor_module.GIT_TIMEOUT)
+
+    monkeypatch.setattr(doctor_module.shutil, "which", lambda name: "/usr/bin/git")
+    monkeypatch.setattr(doctor_module.subprocess, "run", timeout)
+    result = doctor_module.CheckResult()
+    doctor_module._warn_unstable_source(result, "local/demo", source)
+    assert result.problems == 0
+    assert result.lines == []
