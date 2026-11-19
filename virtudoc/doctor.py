@@ -140,13 +140,14 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
             WHERE d.id IS NULL
             """
         ).fetchone()[0]
-        orphan_fts = conn.execute(
-            "SELECT COUNT(*) FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)"
-        ).fetchone()[0]
-        if orphan_chunks or orphan_fts:
-            result.warn(f"integrity: {orphan_chunks} orphan chunks, {orphan_fts} orphan fts rows")
+        # External-content FTS tables hide orphan index rows from plain SELECTs,
+        # so verify the index structure instead of counting rows.
+        conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+        conn.execute("INSERT INTO chunks_tri(chunks_tri) VALUES('integrity-check')")
+        if orphan_chunks:
+            result.warn(f"integrity: {orphan_chunks} orphan chunks")
         else:
-            result.ok("index integrity: no orphans")
+            result.ok("index integrity: no orphans, FTS index consistent")
     except sqlite3.Error as exc:
         result.warn(f"integrity check failed: {exc}")
 
