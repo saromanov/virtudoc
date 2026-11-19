@@ -445,6 +445,9 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
         print(f"error: cannot parse {path}: {exc}", file=sys.stderr)
         return 1
     libraries = data.get("libraries", [])
+    if not isinstance(libraries, list):
+        print("error: 'libraries' must be an array of tables ([[libraries]])", file=sys.stderr)
+        return 1
     if not libraries:
         print(f"no libraries in {path}")
         return 0
@@ -452,6 +455,10 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
     imported, failed = 0, 0
     with _open(cfg) as conn:
         for lib in libraries:
+            if not isinstance(lib, dict):
+                print(f"error: entry is not a table: {lib!r}", file=sys.stderr)
+                failed += 1
+                continue
             name = str(lib.get("name", ""))
             source = lib.get("path")
             if not name or not source:

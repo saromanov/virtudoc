@@ -523,3 +523,19 @@ def test_cli_closes_every_database_connection(home, monkeypatch):
     for connection in opened:
         with pytest.raises(sqlite3.ProgrammingError):
             connection.execute("SELECT 1")
+
+
+def test_import_rejects_non_array_libraries(home, tmp_path, capsys):
+    setup = tmp_path / "bad-shape.toml"
+    setup.write_text('libraries = "oops"\n', encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    assert "'libraries' must be an array of tables" in capsys.readouterr().err
+
+
+def test_import_rejects_non_table_entries(home, tmp_path, capsys):
+    setup = tmp_path / "bad-entries.toml"
+    setup.write_text('libraries = ["oops"]\n', encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "entry is not a table" in captured.err
+    assert "failed: 1" in captured.out
