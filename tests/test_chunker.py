@@ -69,6 +69,12 @@ def test_non_positive_max_tokens_terminates():
     assert chunks
 
 
+def test_negative_token_limits_terminate():
+    text = "# T\n\n" + "слово " * 20 + "\n"
+    chunks = Chunker(target_tokens=-10, max_tokens=-1, overlap_tokens=0).chunk(parse_markdown(text))
+    assert chunks
+
+
 def test_code_ratio():
     code = "\n".join(f"x = {i}" for i in range(30))
     text = f"# T\n\n## Раздел\n\nКороткий текст.\n\n```python\n{code}\n```\n"

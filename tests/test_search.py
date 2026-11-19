@@ -217,6 +217,29 @@ def test_search_section_filter_accepts_ascii_arrow(indexed, conn):
     assert all(s.heading_path.startswith("Руководство → API → Ошибки") for s in result.snippets)
 
 
+def test_section_filter_matches_heading_with_ascii_arrow_in_text(tmp_path, conn):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    src = tmp_path / "arrowdocs"
+    src.mkdir()
+    (src / "states.md").write_text(
+        "# Guide\n\n## Input -> Output\n\narrowmarker describes the transition.\n",
+        encoding="utf-8",
+    )
+    lib_id = add_library(conn, src, "arrow")
+    index_library(conn, lib_id, Chunker())
+
+    for section in ("Guide -> Input -> Output", "Guide → Input -> Output"):
+        result = search(conn, "arrowmarker", library_id=lib_id, section=section)
+        assert result.snippets
+        assert result.snippets[0].heading_path == "Guide → Input -> Output"
+
+    tree = library_outline(conn, lib_id, section="Guide -> Input -> Output")
+    assert [node.section for node in tree] == ["Guide"]
+    assert [child.section for child in tree[0].children] == ["Input -> Output"]
+
+
 def test_language_boost_prefers_code_language(indexed, conn, tmp_path):
     from virtudoc.indexer.chunker import Chunker
     from virtudoc.indexer.indexer import add_library, index_library

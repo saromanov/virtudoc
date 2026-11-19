@@ -191,7 +191,7 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
             )
             _print_outline(tree)
             return 0
-        budget = args.tokens or cfg.get_int("search.default_tokens")
+        budget = args.tokens if args.tokens is not None else cfg.get_int("search.default_tokens")
         if budget <= 0:
             print("error: token budget must be a positive number", file=sys.stderr)
             return 1
@@ -445,6 +445,12 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
         print(f"error: cannot parse {path}: {exc}", file=sys.stderr)
         return 1
     libraries = data.get("libraries", [])
+    if not isinstance(libraries, (list, dict)):
+        print(
+            f"error: 'libraries' must be a list of tables in {path}",
+            file=sys.stderr,
+        )
+        return 1
     if not libraries:
         print(f"no libraries in {path}")
         return 0

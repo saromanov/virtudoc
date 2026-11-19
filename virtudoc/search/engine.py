@@ -159,14 +159,14 @@ def _fetch_candidates(
     if library_id:
         sql += " AND c.library_id = ?"
         params.append(library_id)
-    if section:
-        sql += " AND (c.heading_path = ? OR substr(c.heading_path, 1, length(?) + 3) = ? || ' → ')"
-        params.extend([section, section, section])
     sql += " ORDER BY rank"
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
-    return conn.execute(sql, params).fetchall()
+    rows = conn.execute(sql, params).fetchall()
+    if section:
+        rows = [row for row in rows if _section_path_matches(row["heading_path"], section)]
+    return rows
 
 
 def normalize_section(section: str | None) -> str | None:
@@ -174,12 +174,22 @@ def normalize_section(section: str | None) -> str | None:
 
     Heading paths are stored with a Unicode arrow ("API → Middleware"), but
     the docs and the MCP tool description show the ASCII form
-    ("API -> Middleware"), so agents and users paste either one.
+    ("API -> Middleware"), so agents and users paste either one. Every arrow
+    is collapsed, in the argument and in the stored path alike, so a heading
+    whose own text contains "->" remains addressable.
     """
     if not section or not section.strip():
         return None
     parts = [part for part in _SECTION_ARROW_RE.split(section.strip()) if part]
     return " → ".join(parts) or None
+
+
+def _section_path_matches(path: str | None, section: str) -> bool:
+    """True when ``path`` is ``section`` or one of its descendants."""
+    canonical = normalize_section(path)
+    if canonical is None:
+        return False
+    return canonical == section or canonical.startswith(section + " → ")
 
 
 def _topic_tokens(row: sqlite3.Row) -> set[str]:
@@ -505,7 +515,7 @@ def library_outline(
     nodes: dict[str, OutlineNode] = {}
     top: list[OutlineNode] = []
     for path, count, tokens in rows:
-        if section and path != section and not path.startswith(section + " → "):
+        if section and not _section_path_matches(path, section):
             continue
         parts = path.split(" → ") if path else ["(no section)"]
         for index, part in enumerate(parts):

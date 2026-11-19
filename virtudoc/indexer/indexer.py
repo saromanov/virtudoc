@@ -297,8 +297,7 @@ def add_and_index_library(
     return lib_id, stats
 
 
-def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
-    """Drop every indexed document of a library, keeping registration and notes."""
+def _clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
     conn.execute(
         "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
         (lib_id,),
@@ -308,6 +307,11 @@ def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
         (lib_id,),
     )
     conn.execute("DELETE FROM documents WHERE library_id = ?", (lib_id,))
+
+
+def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
+    """Drop every indexed document of a library, keeping registration and notes."""
+    _clear_library_index(conn, lib_id)
     conn.commit()
 
 
@@ -320,8 +324,15 @@ def reindex_library(
     row = conn.execute("SELECT id FROM libraries WHERE id = ?", (lib_id,)).fetchone()
     if row is None:
         raise LibraryNotFoundError(f"library not found: {lib_id}")
-    clear_library_index(conn, lib_id)
-    return index_library(conn, lib_id, chunker)
+    _begin_index(conn)
+    try:
+        _clear_library_index(conn, lib_id)
+        stats = _index_library(conn, lib_id, chunker)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return stats
 
 
 def refresh_if_stale(

@@ -100,10 +100,11 @@ def test_search_unknown_library(home, capsys):
     assert "not found" in capsys.readouterr().err
 
 
-def test_search_rejects_non_positive_token_budget(home, docs_dir, capsys):
+@pytest.mark.parametrize("tokens", ["0", "-5"])
+def test_search_rejects_non_positive_token_budget(home, docs_dir, capsys, tokens):
     assert main(["add", str(docs_dir), "--name", "demo"]) == 0
     capsys.readouterr()
-    assert main(["search", "middleware", "--tokens", "-5"]) == 1
+    assert main(["search", "middleware", "--tokens", tokens]) == 1
     assert "token budget must be a positive number" in capsys.readouterr().err
 
 
@@ -298,6 +299,13 @@ def test_import_reports_malformed_entries(home, tmp_path, capsys, content):
     captured = capsys.readouterr()
     assert "failed: 1" in captured.out
     assert "malformed entry" in captured.err
+
+
+def test_import_rejects_non_list_libraries(home, tmp_path, capsys):
+    setup = tmp_path / "setup.toml"
+    setup.write_text("libraries = 5\n", encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    assert "'libraries' must be a list of tables" in capsys.readouterr().err
 
 
 def test_import_default_path(home, docs_dir, capsys):

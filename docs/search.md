@@ -30,8 +30,9 @@ terminal and for agents calling `get-library-docs`.
    400 by default, 0 disables the trimming) so the agent pays for the
    relevant passage, not the whole page. Fragments are appended until the
    token budget (default 5000) or the result limit (default 20) is
-   reached. Overspending the budget is not an error — the output is cut
-   at a chunk boundary with a 10% margin. Every response reports
+   reached. A page ends before a fragment that does not fit the remaining
+   budget; a fragment larger than the whole budget is truncated to fit.
+   Every response reports
    `total_matches` (all ranked matches for the query, independent of the
    page) and `has_more`. `page=2` continues with the first fragment that
    did not fit the previous page, so token-budget filtering never drops
