@@ -80,6 +80,10 @@ on a non-loopback host without either setting. HTTP clients must send
 receive `401 Unauthorized`. If a token is configured on loopback, it is also
 enforced there.
 
+A bearer token over plain HTTP is sent in cleartext. It restricts access on a
+trusted network only. Before exposing a non-loopback interface to an
+untrusted network, put the server behind a TLS-terminating reverse proxy.
+
 ## CLI + skill mode (no MCP setup)
 
 If the agent can run shell commands, skip the MCP configuration entirely.
