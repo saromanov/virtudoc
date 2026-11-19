@@ -74,3 +74,23 @@ def test_relevant_notes_truncates_oversized_first_note(conn, lib):
     notes = relevant_notes(conn, lib, "middleware", budget_tokens=60)
     assert len(notes) == 1
     assert notes[0].text.endswith("…")
+
+
+def test_relevant_notes_match_whole_words_not_substrings(conn, lib):
+    add_note(conn, lib, "Capital city office handling.")
+    assert relevant_notes(conn, lib, "api") == []
+
+    add_note(conn, lib, "Authentication helper for middleware.")
+    notes = relevant_notes(conn, lib, "auth")
+    assert len(notes) == 1
+    assert "Authentication" in notes[0].text
+
+
+def test_relevant_notes_never_exceed_budget(conn, lib):
+    from virtudoc.tokens import estimate_tokens
+
+    for index in range(5):
+        add_note(conn, lib, f"middleware note {index}: " + "detail " * 80)
+    notes = relevant_notes(conn, lib, "middleware", budget_tokens=120)
+    assert notes
+    assert sum(estimate_tokens(note.text) for note in notes) <= 120

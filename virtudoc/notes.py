@@ -4,8 +4,19 @@ import sqlite3
 from dataclasses import dataclass
 
 from .db import fts_normalize, utc_now
-from .search.engine import _stem, tokenize
+from .search.engine import _TOKEN_RE, MIN_TOPIC_PREFIX, _stem, tokenize
 from .tokens import estimate_tokens, truncate_to_tokens
+
+
+def _note_token_matches(token: str, words: list[str]) -> bool:
+    """Whole-word match, allowing inflection only for meaningful stems."""
+    stem = _stem(token)
+    for word in words:
+        if word == token or word == stem:
+            return True
+        if len(stem) >= MIN_TOPIC_PREFIX and word.startswith(stem):
+            return True
+    return False
 
 
 @dataclass
@@ -56,7 +67,8 @@ def relevant_notes(
     scored: list[tuple[int, sqlite3.Row]] = []
     for row in rows:
         haystack = fts_normalize(row["text"].lower())
-        matched = sum(1 for tok in tokens if tok in haystack or _stem(tok) in haystack)
+        words = _TOKEN_RE.findall(haystack)
+        matched = sum(1 for tok in tokens if _note_token_matches(tok, words))
         if matched:
             scored.append((matched, row))
     scored.sort(key=lambda item: (-item[0], -item[1]["id"]))
@@ -64,12 +76,13 @@ def relevant_notes(
     notes: list[Note] = []
     used = 0
     for matched, row in scored:
+        remaining = budget_tokens - used
+        if remaining <= 0:
+            break
         text = row["text"]
         est = estimate_tokens(text)
-        if used + est > budget_tokens and notes:
-            continue
-        if used + est > budget_tokens:
-            text = truncate_to_tokens(text, max(budget_tokens - used, 50))
+        if est > remaining:
+            text = truncate_to_tokens(text, remaining)
             est = estimate_tokens(text)
         notes.append(Note(id=row["id"], text=text, created_at=row["created_at"], score=matched))
         used += est
