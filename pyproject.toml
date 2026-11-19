@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-cov>=5",
 ]
 
 [project.scripts]
@@ -60,3 +61,11 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["virtudoc"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false

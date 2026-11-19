@@ -78,3 +78,153 @@ def test_doctor_ignores_the_fetch_pin_sidecar(home, tmp_path, capsys):
     code, out = _add_and_doctor(clone, capsys)
     assert code == 0
     assert "uncommitted" not in out
+
+
+def _doctor_config(tmp_path):
+    from virtudoc.config import Config
+
+    cfg = Config()
+    cfg.values["db.path"] = str(tmp_path / "index.db")
+    return cfg
+
+
+def test_doctor_reports_missing_database(conn, tmp_path):
+    from virtudoc.config import Config
+    from virtudoc.doctor import run_doctor
+
+    cfg = Config()
+    cfg.values["db.path"] = str(tmp_path / "absent.db")
+    result = run_doctor(conn, cfg)
+    assert result.problems == 1
+    assert any("database file not found" in line for line in result.lines)
+
+
+def test_doctor_reports_unreadable_meta(conn, tmp_path):
+    from virtudoc.doctor import run_doctor
+
+    conn.execute("DROP TABLE meta")
+    conn.commit()
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("cannot read meta table" in line for line in result.lines)
+
+
+def test_doctor_reports_no_libraries(conn, tmp_path):
+    from virtudoc.doctor import run_doctor
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("no libraries registered" in line for line in result.lines)
+    assert result.problems == 0
+
+
+def test_doctor_reports_missing_manifest(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.versions import link_library
+
+    lib_id = add_library(conn, docs_dir, "demo", version="1.0")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    manifest = project / "requirements.txt"
+    manifest.write_text("demo==1.0\n", encoding="utf-8")
+    link_library(conn, lib_id, project)
+    manifest.unlink()
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("manifest missing" in line for line in result.lines)
+
+
+def test_doctor_reports_dependency_removed_from_manifest(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.versions import link_library
+
+    lib_id = add_library(conn, docs_dir, "demo", version="1.0")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    manifest = project / "requirements.txt"
+    manifest.write_text("demo==1.0\n", encoding="utf-8")
+    link_library(conn, lib_id, project)
+    manifest.write_text("other==1.0\n", encoding="utf-8")
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("dependency not found" in line for line in result.lines)
+
+
+def test_doctor_reports_matching_versions(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.versions import link_library
+
+    lib_id = add_library(conn, docs_dir, "demo", version="1.0")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==1.0.0\n", encoding="utf-8")
+    link_library(conn, lib_id, project)
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("versions match" in line for line in result.lines)
+    assert result.problems == 0
+
+
+def test_doctor_reports_orphan_chunks(conn, tmp_path):
+    from virtudoc.doctor import run_doctor
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        "INSERT INTO chunks (document_id, library_id, heading_path, ord, text, token_est)"
+        " VALUES (999999, 'local/ghost', '', 0, 'orphan', 1)"
+    )
+    conn.commit()
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("1 orphan chunks" in line for line in result.lines)
+
+
+def test_doctor_reports_integrity_check_failure(conn, tmp_path):
+    from virtudoc.doctor import run_doctor
+
+    conn.execute("DROP TABLE chunks_fts")
+    conn.commit()
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("integrity check failed" in line for line in result.lines)
+
+
+def test_doctor_warns_on_detached_head(home, tmp_path, capsys):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    clone = _clone(_git_origin(tmp_path), tmp_path)
+    subprocess.run(["git", "checkout", "-q", "--detach", "HEAD"], cwd=clone, check=True)
+    code, out = _add_and_doctor(clone, capsys)
+    assert code == 1
+    assert "detached HEAD state" in out
+
+
+def test_doctor_warns_on_pinned_branch_mismatch(home, tmp_path, capsys):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    from virtudoc.fetcher import PIN_FILE
+
+    clone = _clone(_git_origin(tmp_path), tmp_path)
+    (clone / PIN_FILE).write_text('{"branch": "release"}', encoding="utf-8")
+    code, out = _add_and_doctor(clone, capsys)
+    assert code == 1
+    assert "pinned to branch 'release'" in out
+    assert "is on 'main'" in out
+
+
+def test_doctor_skips_git_checks_without_git(conn, docs_dir, tmp_path, monkeypatch):
+    import virtudoc.doctor as doctor_module
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    monkeypatch.setattr(doctor_module.shutil, "which", lambda name: None)
+    result = doctor_module.run_doctor(conn, _doctor_config(tmp_path))
+    assert any("source present" in line for line in result.lines)
+    assert not any("git checkout" in line for line in result.lines)

@@ -74,3 +74,33 @@ def test_token_est_matches_text():
     text = "# T\n\n## Раздел\n\n" + "текст " * 50 + "\n"
     chunks = make_chunker().chunk(parse_markdown(text))
     assert all(c.token_est == estimate_tokens(c.text) for c in chunks)
+
+
+def test_split_oversized_multiline_text():
+    from virtudoc.indexer.chunker import _split_oversized
+
+    text = "а" * 120 + "\n" + "б" * 120
+    parts = _split_oversized(text, 40)
+    assert len(parts) == 2
+    assert parts[0].startswith("а")
+    assert parts[1].startswith("(continued)")
+
+
+def test_overlap_disabled_and_empty_text():
+    from virtudoc.indexer.chunker import _overlap_tail
+
+    assert _overlap_tail("", 10) == ""
+    assert _overlap_tail("текст", 0) == ""
+
+    text = f"# T\n\n## Раздел\n\n{'слово ' * 60}\n\n{'ещё ' * 60}\n"
+    chunks = make_chunker(overlap=0).chunk(parse_markdown(text))
+    assert len(chunks) >= 2
+    assert all(chunk.text for chunk in chunks)
+
+
+def test_whitespace_only_document_produces_no_chunks():
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.parsers import Block, ParsedDocument
+
+    doc = ParsedDocument(blocks=[Block("para", "   "), Block("para", "\n\n")])
+    assert Chunker().chunk(doc) == []

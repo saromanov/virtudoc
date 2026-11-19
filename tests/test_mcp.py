@@ -477,3 +477,213 @@ def test_http_authentication_configuration(home, monkeypatch, host, token, expec
 
     assert mcp_server_module.run_serve(config, http=9000) == 0
     assert captured == {"host": host, "port": 9000, "token": expected_token}
+
+
+@pytest.mark.anyio
+async def test_mcp_find_library_without_matches_in_process(home_index):
+    import virtudoc.mcp_server as mcp_server_module
+
+    server = mcp_server_module.build_server(Config())
+    result = await server.call_tool("find-library", {"libraryName": "zizigaura", "query": "zzz"})
+    payload = _payload(result)
+    assert payload["libraries"] == []
+    assert "virtudoc add" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_mcp_rejects_unsupported_mode(home_index):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    import virtudoc.mcp_server as mcp_server_module
+
+    server = mcp_server_module.build_server(Config())
+    with pytest.raises(ToolError, match="unsupported mode"):
+        await server.call_tool(
+            "get-library-docs",
+            {"libraryId": "local/demo", "query": "middleware", "mode": "raw"},
+        )
+
+
+@pytest.mark.anyio
+async def test_mcp_unknown_library_in_process(home_index):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    import virtudoc.mcp_server as mcp_server_module
+
+    server = mcp_server_module.build_server(Config())
+    with pytest.raises(ToolError, match="library not found"):
+        await server.call_tool("get-library-docs", {"libraryId": "local/ghost", "query": "x"})
+
+
+@pytest.mark.anyio
+async def test_mcp_outline_mode_in_process(home_index):
+    import virtudoc.mcp_server as mcp_server_module
+
+    server = mcp_server_module.build_server(Config())
+    result = await server.call_tool(
+        "get-library-docs",
+        {"libraryId": "local/demo", "query": "middleware", "mode": "outline"},
+    )
+    payload = _payload(result)
+    assert payload["mode"] == "outline"
+    assert payload["sections"]
+    assert payload["total_tokens"] > 0
+    assert "version_mismatch" not in payload
+
+
+@pytest.mark.anyio
+async def test_mcp_outline_includes_version_mismatch(home, docs_dir, tmp_path):
+    import virtudoc.mcp_server as mcp_server_module
+    from virtudoc.versions import link_library
+
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs_dir, "demo", version="1.0")
+        index_library(conn, lib_id, Chunker())
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "requirements.txt").write_text("demo==2.0.0\n", encoding="utf-8")
+        link_library(conn, lib_id, project)
+
+    server = mcp_server_module.build_server(Config())
+    result = await server.call_tool(
+        "get-library-docs",
+        {"libraryId": "local/demo", "query": "middleware", "mode": "outline"},
+    )
+    payload = _payload(result)
+    assert payload["version_mismatch"]["project_version"] == "2.0.0"
+
+
+@pytest.mark.anyio
+async def test_mcp_page_beyond_results_reports_message(home_index):
+    import virtudoc.mcp_server as mcp_server_module
+
+    server = mcp_server_module.build_server(Config())
+    result = await server.call_tool(
+        "get-library-docs",
+        {"libraryId": "local/demo", "query": "middleware", "page": 9},
+    )
+    payload = _payload(result)
+    assert payload["snippets"] == []
+    assert "no fragments on page 9" in payload["message"]
+
+
+def test_prepare_serve_skips_sources_without_git(home, tmp_path, monkeypatch):
+    import virtudoc.mcp_server as mcp_server_module
+
+    plain = tmp_path / "plaindocs"
+    plain.mkdir()
+    (plain / "index.md").write_text("# Plain\n\nText.\n", encoding="utf-8")
+    called = []
+    monkeypatch.setattr(
+        mcp_server_module, "ensure_pinned_checkout", lambda source: called.append(source)
+    )
+    with open_db(Config().db_path) as conn:
+        add_library(conn, plain, "plain")
+    mcp_server_module.prepare_serve(Config())
+    assert called == []
+
+
+@pytest.mark.anyio
+async def test_bearer_middleware_passes_non_http_scopes():
+    from virtudoc.mcp_server import BearerAuthMiddleware
+
+    seen = []
+
+    async def downstream(scope, receive, send):
+        seen.append(scope["type"])
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        pass
+
+    app = BearerAuthMiddleware(downstream, "secret")
+    await app({"type": "websocket", "headers": []}, receive, send)
+    assert seen == ["websocket"]
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("localhost", True),
+        ("LOCALHOST", True),
+        ("127.0.0.2", True),
+        ("::1", True),
+        ("0.0.0.0", False),
+        ("example.com", False),
+    ],
+)
+def test_is_loopback_host(host, expected):
+    from virtudoc.mcp_server import _is_loopback_host
+
+    assert _is_loopback_host(host) is expected
+
+
+def _fake_uvicorn(monkeypatch):
+    import types
+
+    captured = {}
+
+    async def serve(self):
+        captured["served"] = True
+
+    module = types.ModuleType("uvicorn")
+
+    def config(app, host, port, log_level):
+        captured.update(app=app, host=host, port=port, log_level=log_level)
+        return object()
+
+    module.Config = config
+    module.Server = lambda uvicorn_config: types.SimpleNamespace(serve=lambda: serve(None))
+    monkeypatch.setitem(sys.modules, "uvicorn", module)
+    return captured
+
+
+@pytest.mark.parametrize("token", [None, "secret"])
+def test_run_http_builds_app_and_wraps_auth(token, monkeypatch):
+    import types
+
+    import virtudoc.mcp_server as mcp_server_module
+    from virtudoc.mcp_server import BearerAuthMiddleware
+
+    raw_app = types.SimpleNamespace(name="app")
+
+    async def run_stdio_async():
+        raise AssertionError("stdio must not start in HTTP mode")
+
+    server = types.SimpleNamespace(
+        streamable_http_app=lambda host: raw_app,
+        settings=types.SimpleNamespace(log_level="INFO"),
+        run_stdio_async=run_stdio_async,
+    )
+    captured = _fake_uvicorn(monkeypatch)
+
+    mcp_server_module._run_http(server, host="127.0.0.1", port=1234, token=token)
+
+    assert captured["served"] is True
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 1234
+    assert captured["log_level"] == "info"
+    if token is None:
+        assert captured["app"] is raw_app
+    else:
+        assert isinstance(captured["app"], BearerAuthMiddleware)
+
+
+def test_run_serve_stdio_transport(home, monkeypatch):
+    import types
+
+    import virtudoc.mcp_server as mcp_server_module
+
+    started = {}
+
+    async def run_stdio_async():
+        started["stdio"] = True
+
+    fake_server = types.SimpleNamespace(run_stdio_async=run_stdio_async)
+    monkeypatch.setattr(mcp_server_module, "prepare_serve", lambda config: None)
+    monkeypatch.setattr(mcp_server_module, "build_server", lambda config: fake_server)
+
+    assert mcp_server_module.run_serve(Config()) == 0
+    assert started["stdio"] is True

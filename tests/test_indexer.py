@@ -272,3 +272,106 @@ def test_refresh_if_stale_detects_deleted_and_added_files(conn, docs_dir):
 
 def test_refresh_if_stale_unknown_library(conn):
     assert refresh_if_stale(conn, "local/nope", Chunker()) is None
+
+
+def test_index_unknown_library(conn):
+    with pytest.raises(LibraryNotFoundError):
+        index_library(conn, "local/nope", Chunker())
+
+
+def test_index_missing_source_raises(conn, docs_dir):
+    import shutil
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    shutil.rmtree(docs_dir)
+    with pytest.raises(ValueError, match="source directory unavailable"):
+        index_library(conn, lib_id, Chunker())
+
+
+def test_index_reports_skipped_large_files(conn, tmp_path, monkeypatch):
+    from virtudoc.indexer import walker
+
+    monkeypatch.setattr(walker, "MAX_FILE_SIZE", 10)
+    source = tmp_path / "skips"
+    source.mkdir()
+    (source / "big.md").write_text("# Big\n\n" + "x" * 100, encoding="utf-8")
+    lib_id = add_library(conn, source, "skips")
+    stats = index_library(conn, lib_id, Chunker())
+    assert stats.skipped_files == ["big.md"]
+    assert stats.errors == 0
+    assert stats.processed == 0
+
+
+def test_index_reports_unreadable_file(conn, tmp_path, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+    from virtudoc.indexer.walker import WalkedFile, WalkResult
+
+    lib_id = add_library(conn, tmp_path, "demo")
+    missing = tmp_path / "missing.md"
+    monkeypatch.setattr(
+        indexer_module,
+        "walk_source",
+        lambda source: WalkResult(files=[WalkedFile(path=missing, rel_path="missing.md")]),
+    )
+    stats = index_library(conn, lib_id, Chunker())
+    assert stats.errors == 1
+    assert stats.processed == 1
+    assert stats.changed == 0
+
+
+def test_index_rolls_back_on_insert_failure(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+
+    def fail_insert(*args, **kwargs):
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(indexer_module, "insert_chunk", fail_insert)
+    lib_id = add_library(conn, docs_dir, "demo")
+    with pytest.raises(RuntimeError, match="insert failed"):
+        index_library(conn, lib_id, Chunker())
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+
+
+def test_begin_index_lock_error_is_wrapped():
+    import sqlite3
+    import types
+
+    from virtudoc.indexer.indexer import IndexLockError, _begin_index
+
+    def locked(sql):
+        raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(IndexLockError, match="failed to acquire the index lock"):
+        _begin_index(types.SimpleNamespace(execute=locked))
+
+
+def test_refresh_if_stale_missing_source(conn, docs_dir):
+    import shutil
+
+    add_library(conn, docs_dir, "demo")
+    shutil.rmtree(docs_dir)
+    assert refresh_if_stale(conn, "local/demo", Chunker()) is None
+
+
+def test_refresh_if_stale_handles_invalid_timestamp(conn, docs_dir):
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    conn.execute("UPDATE libraries SET updated_at = 'not-a-date' WHERE id = ?", (lib_id,))
+    conn.commit()
+    assert refresh_if_stale(conn, lib_id, Chunker()) is not None
+
+
+def test_refresh_if_stale_skips_when_lock_is_held(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+
+    def locked(*args, **kwargs):
+        raise indexer_module.IndexLockError("locked")
+
+    (docs_dir / "changed.md").write_text("# New\n\nFresh.\n", encoding="utf-8")
+    monkeypatch.setattr(indexer_module, "index_library", locked)
+    assert refresh_if_stale(conn, lib_id, Chunker()) is None
+    assert indexer_module._safe_index(conn, lib_id, Chunker()) is None

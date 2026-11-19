@@ -300,3 +300,205 @@ def test_export_escapes_special_characters(home, tmp_path, capsys):
     capsys.readouterr()
     assert main(["import", str(setup)]) == 0
     assert "imported: 1, failed: 0" in capsys.readouterr().out
+
+
+def test_update_single_library(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["update", "--name", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "local/demo:" in out
+    assert "skipped: 3" in out
+
+
+def test_update_unknown_library(home, capsys):
+    assert main(["update", "--name", "nope"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_update_without_libraries(home, capsys):
+    assert main(["update"]) == 0
+    assert "no libraries registered" in capsys.readouterr().out
+
+
+def test_update_prints_chunk_settings_note(home, docs_dir, capsys):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text("[chunk]\ntarget_tokens = 40\n", encoding="utf-8")
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["update"]) == 0
+    out = capsys.readouterr().out
+    assert "changed chunk.* settings only affect new indexing" in out
+    assert "virtudoc reindex <name>" in out
+
+
+def test_add_reports_skipped_large_files(home, tmp_path, capsys, monkeypatch):
+    from virtudoc.indexer import walker
+
+    monkeypatch.setattr(walker, "MAX_FILE_SIZE", 10)
+    docs = tmp_path / "skipped"
+    docs.mkdir()
+    (docs / "small.md").write_text("# A\n", encoding="utf-8")
+    (docs / "big.md").write_text("# Big\n\n" + "x" * 100, encoding="utf-8")
+    assert main(["add", str(docs), "--name", "skips"]) == 0
+    err = capsys.readouterr().err
+    assert "skipped (over 5 MB): big.md" in err
+
+
+def test_search_outline(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["search", "middleware", "--name", "demo", "--outline"]) == 0
+    out = capsys.readouterr().out
+    assert "outline of local/demo" in out
+    assert "- Руководство" in out
+    assert "API" in out
+
+
+def test_search_outline_requires_name(home, capsys):
+    assert main(["search", "middleware", "--outline"]) == 1
+    assert "--outline requires --name" in capsys.readouterr().err
+
+
+def test_search_without_matches(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["search", "абракадабра-которой-нет"]) == 0
+    assert "nothing found" in capsys.readouterr().out
+
+
+def test_note_list_output(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["note", "list", "demo"]) == 0
+    assert "no notes for local/demo" in capsys.readouterr().out
+    main(["note", "add", "demo", "--text", "Convention note."])
+    capsys.readouterr()
+    assert main(["note", "list", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "#1\t" in out
+    assert "Convention note." in out
+
+
+def test_note_commands_unknown_library(home, capsys):
+    assert main(["note", "list", "nope"]) == 1
+    assert "not found" in capsys.readouterr().err
+    assert main(["note", "remove", "nope", "--id", "1"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_link_and_unlink_errors(home, docs_dir, tmp_path, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["link", "nope", "--project", str(tmp_path)]) == 1
+    assert "not found" in capsys.readouterr().err
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("other==1.0\n", encoding="utf-8")
+    assert main(["link", "demo", "--project", str(project)]) == 1
+    assert "not found in requirements.txt" in capsys.readouterr().err
+
+    assert main(["unlink", "demo"]) == 0
+    assert "has no project link" in capsys.readouterr().out
+    assert main(["unlink", "nope"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_remove_unknown_library(home, capsys):
+    assert main(["remove", "nope", "--yes"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_import_missing_file(home, tmp_path, capsys):
+    assert main(["import", str(tmp_path / "absent.toml")]) == 1
+    assert "setup file not found" in capsys.readouterr().err
+
+
+def test_import_malformed_toml(home, tmp_path, capsys):
+    setup = tmp_path / "broken.toml"
+    setup.write_text("[[libraries]\n", encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    assert "cannot parse" in capsys.readouterr().err
+
+
+def test_import_empty_file(home, tmp_path, capsys):
+    setup = tmp_path / "empty.toml"
+    setup.write_text("libraries = []\n", encoding="utf-8")
+    assert main(["import", str(setup)]) == 0
+    assert "no libraries in" in capsys.readouterr().out
+
+
+def test_import_entry_without_path(home, tmp_path, capsys):
+    setup = tmp_path / "partial.toml"
+    setup.write_text('[[libraries]]\nname = "demo"\n', encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "entry without name/path" in captured.err
+    assert "failed: 1" in captured.out
+
+
+def test_serve_delegates_to_mcp_server(home, monkeypatch):
+    import virtudoc.mcp_server as mcp_server_module
+
+    captured = {}
+
+    def fake_run_serve(config, *, http):
+        captured["http"] = http
+        return 7
+
+    monkeypatch.setattr(mcp_server_module, "run_serve", fake_run_serve)
+    assert main(["serve"]) == 7
+    assert captured["http"] is False
+
+
+def test_server_command_prefers_executable_named_virtudoc(home, tmp_path, monkeypatch):
+    import sys
+
+    from virtudoc.cli import _server_command
+
+    executable = tmp_path / "virtudoc"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(executable), "list"])
+    assert _server_command() == (str(executable), [])
+
+
+def test_server_command_falls_back_to_which(home, tmp_path, monkeypatch):
+    import sys
+
+    from virtudoc import cli as cli_module
+
+    monkeypatch.setattr(sys, "argv", ["python", "list"])
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: str(tmp_path / "virtudoc"))
+    assert cli_module._server_command() == (str((tmp_path / "virtudoc").resolve()), [])
+
+
+def test_module_entrypoint_runs_cli(home, monkeypatch):
+    import runpy
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["virtudoc", "list"])
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("virtudoc", run_name="__main__")
+    assert exc_info.value.code == 0
+
+
+def test_init_reports_link_errors(home, docs_dir, tmp_path, capsys, monkeypatch):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==1.0\n", encoding="utf-8")
+    monkeypatch.setattr("virtudoc.cli.link_matches", lambda conn, scan: ([], ["local/demo: boom"]))
+    assert main(["init", str(project), "--link"]) == 1
+    assert "error: local/demo: boom" in capsys.readouterr().err
+
+
+def test_cli_module_entrypoint(home, monkeypatch):
+    import runpy
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["virtudoc", "list"])
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("virtudoc.cli", run_name="__main__")
+    assert exc_info.value.code == 0

@@ -28,4 +28,4 @@ jobs:
           ruff format --check virtudoc tests
 
       - name: Tests
-        run: pytest -q
+        run: pytest -q --cov=virtudoc --cov-report=term-missing

@@ -342,3 +342,175 @@ def test_fetch_cache_conflict_message_names_the_fix(home):
     (dest / "index.md").write_text("# stale\n", encoding="utf-8")
     with pytest.raises(FetchError, match=f"rm -rf {dest}"):
         fetch_source("https://example.com/repo.git", "conflict")
+
+
+def test_fetch_rejects_non_positive_extract_limits(home, tmp_path):
+    archive = _docs_zip(tmp_path)
+    with pytest.raises(ValueError, match="must be positive"):
+        fetch_source(archive.as_uri(), "limits", max_extract_bytes=0)
+    with pytest.raises(ValueError, match="must be positive"):
+        fetch_source(archive.as_uri(), "limits", max_extract_files=0)
+
+
+def test_fetch_download_failure_is_clean(home, monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("network down")
+
+    monkeypatch.setattr(fetcher_module.urllib.request, "urlopen", broken)
+    with pytest.raises(FetchError, match="failed to download"):
+        fetch_source("https://example.com/docs.zip", "broken-download")
+
+
+def test_fetch_corrupt_archive_is_clean_error(home, tmp_path):
+    archive = tmp_path / "corrupt.zip"
+    archive.write_text("not a zip", encoding="utf-8")
+    with pytest.raises(FetchError, match="failed to extract archive"):
+        fetch_source(archive.as_uri(), "corrupt")
+
+
+def test_fetch_extracts_explicit_directory_entries(home, tmp_path):
+    archive = tmp_path / "with-dir.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("docs-repo/", "")
+        zf.writestr("docs-repo/index.md", "# Index\n")
+    fetch_source(archive.as_uri(), "with-dir")
+    assert (cache_path("with-dir") / "index.md").is_file()
+
+
+def test_replace_cache_restores_backup_when_swap_fails(home, tmp_path, monkeypatch):
+    from virtudoc.fetcher import _replace_cache
+
+    dest = tmp_path / "cache"
+    dest.mkdir()
+    (dest / "old.md").write_text("old", encoding="utf-8")
+    root = tmp_path / "new"
+    root.mkdir()
+    (root / "new.md").write_text("new", encoding="utf-8")
+
+    real_replace = fetcher_module.os.replace
+    calls = {"count": 0}
+
+    def flaky(source, target):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("swap failed")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(fetcher_module.os, "replace", flaky)
+    with pytest.raises(RuntimeError, match="swap failed"):
+        _replace_cache(root, dest)
+
+    assert (dest / "old.md").read_text(encoding="utf-8") == "old"
+    assert not (dest / "new.md").exists()
+
+
+def test_single_root_returns_extracted_for_multiple_entries(home, tmp_path):
+    from virtudoc.fetcher import _single_root
+
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    (extracted / "a.md").write_text("# A\n", encoding="utf-8")
+    (extracted / "b.md").write_text("# B\n", encoding="utf-8")
+    assert _single_root(extracted) == extracted
+
+    nested = tmp_path / "nested"
+    (nested / "only").mkdir(parents=True)
+    assert _single_root(nested) == nested / "only"
+
+
+def test_write_pinned_branch_handles_empty_and_unwritable(home, tmp_path):
+    from virtudoc.fetcher import _write_pinned_branch
+
+    _write_pinned_branch(tmp_path, None)  # no branch: nothing written
+    assert not (tmp_path / ".virtudoc-fetch.json").exists()
+
+    _write_pinned_branch(tmp_path / "missing", "main")  # OSError is ignored
+
+
+def test_ensure_pinned_checkout_keeps_current_branch(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    from virtudoc.fetcher import ensure_pinned_checkout
+
+    repo = _git_repo_with_branches(tmp_path)
+    fetch_source(str(repo), "pin-fresh", branch="release")
+    assert ensure_pinned_checkout(cache_path("pin-fresh")) == "release"
+
+
+def test_ensure_pinned_checkout_swallows_git_errors(home, monkeypatch):
+    from virtudoc.fetcher import PIN_FILE, ensure_pinned_checkout
+
+    dest = cache_path("pin-errors")
+    (dest / ".git").mkdir(parents=True)
+    (dest / PIN_FILE).write_text('{"branch": "release"}', encoding="utf-8")
+
+    def broken(args):
+        raise FetchError("git broke")
+
+    monkeypatch.setattr(fetcher_module.shutil, "which", lambda name: "/usr/bin/git")
+    monkeypatch.setattr(fetcher_module, "_run_git", broken)
+    assert ensure_pinned_checkout(dest) == "release"
+
+
+def test_fetch_requires_git(home, monkeypatch):
+    monkeypatch.setattr(fetcher_module.shutil, "which", lambda name: None)
+    with pytest.raises(FetchError, match="git is not installed"):
+        fetch_source("https://example.com/repo.git", "nogit")
+
+
+def test_fetch_existing_clone_missing_branch(home, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = _git_repo_with_branches(tmp_path)
+    fetch_source(str(repo), "branch-fail")
+    with pytest.raises(FetchError, match="git fetch of branch 'nope' failed"):
+        fetch_source(str(repo), "branch-fail", branch="nope")
+
+
+def test_fetch_checkout_failure_is_clean(home, monkeypatch):
+    from virtudoc.fetcher import _fetch_git
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    dest = cache_path("checkout-fail")
+    (dest / ".git").mkdir(parents=True)
+
+    def fake_run(args):
+        if "fetch" in args:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 1, "", "checkout boom")
+
+    monkeypatch.setattr(fetcher_module, "_run_git", fake_run)
+    with pytest.raises(FetchError, match="git checkout x failed"):
+        _fetch_git("https://example.com/repo.git", dest, branch="x")
+
+
+def test_fetch_pull_failure_is_clean(home, monkeypatch):
+    from virtudoc.fetcher import _fetch_git
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    dest = cache_path("pull-fail")
+    (dest / ".git").mkdir(parents=True)
+    monkeypatch.setattr(
+        fetcher_module,
+        "_run_git",
+        lambda args: subprocess.CompletedProcess(args, 1, "", "pull broke"),
+    )
+    with pytest.raises(FetchError, match="git pull failed"):
+        _fetch_git("https://example.com/repo.git", dest)
+
+
+def test_tar_member_without_stream_is_clean_error(home, tmp_path, monkeypatch):
+    from virtudoc.fetcher import _safe_extract_tar
+
+    archive = tmp_path / "stream.tar"
+    with tarfile.open(archive, "w") as tf:
+        info = tarfile.TarInfo("a.md")
+        info.size = 0
+        tf.addfile(info)
+
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", lambda self, member: None)
+    with tarfile.open(archive) as tf:
+        with pytest.raises(FetchError, match="cannot extract archive member"):
+            _safe_extract_tar(tf, tmp_path / "out")

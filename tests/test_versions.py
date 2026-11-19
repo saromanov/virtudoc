@@ -324,3 +324,42 @@ def test_link_with_explicit_manifest(conn, docs_dir, tmp_path):
     assert info.manifest_path == lock
     assert info.dep_version == "5.0.0"
     assert get_link(conn, lib_id)["manifest_path"] == str(lock)
+
+
+def test_extract_pyproject_dependency_without_version(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text('[project]\ndependencies = ["demo"]\n', encoding="utf-8")
+    assert extract_dependencies(manifest) == {"demo": None}
+
+
+def test_extract_pyproject_ignores_non_string_requirement(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text("[project]\ndependencies = [123]\n", encoding="utf-8")
+    assert extract_dependencies(manifest) == {}
+
+
+def test_extract_pyproject_ignores_non_table_poetry_dependencies(tmp_path):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text("[tool.poetry]\ndependencies = 'bad'\n", encoding="utf-8")
+    assert extract_dependencies(manifest) == {}
+
+
+def test_extract_requirements_skips_option_lines(tmp_path):
+    manifest = tmp_path / "requirements.txt"
+    manifest.write_text("-e .\ndemo==1.0\n", encoding="utf-8")
+    assert extract_dependencies(manifest) == {"demo": "1.0"}
+
+
+def test_extract_package_lock_ignores_non_table_entries(tmp_path):
+    manifest = tmp_path / "uv.lock"
+    manifest.write_text('package = ["bad"]\n', encoding="utf-8")
+    assert extract_dependencies(manifest) == {}
+
+
+def test_link_with_missing_explicit_manifest(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    with pytest.raises(ValueError, match="dependency manifest not found"):
+        link_library(conn, lib_id, project, manifest=project / "nope.toml")

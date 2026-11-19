@@ -108,3 +108,37 @@ def test_html_sphinx_docusaurus_content_without_boilerplate_or_duplicates():
         ("code", "pip install demo\ndemo run"),
         ("para", "Usage example"),
     ]
+
+
+def test_rst_directive_is_skipped():
+    doc = parse_rst(".. note::\n   внутренний текст\n\nОбычный параграф.\n")
+    assert [(block.kind, block.text) for block in doc.blocks] == [("para", "Обычный параграф.")]
+
+
+def test_html_startend_tag_and_inline_break():
+    doc = parse_html("<div>до <br/> после</div>")
+    assert [block.text for block in doc.blocks] == ["до после"]
+
+
+def test_html_pre_break_becomes_newline():
+    doc = parse_html("<pre>first<br/>second</pre>")
+    assert doc.blocks[0].kind == "code"
+    assert doc.blocks[0].text == "first\nsecond"
+
+
+def test_html_table_row_without_cells_falls_back_to_text():
+    doc = parse_html("<table><tr>bare text</tr></table>")
+    assert [block.text for block in doc.blocks] == ["bare text"]
+
+
+def test_parse_file_dispatches_by_extension(tmp_path):
+    import pytest
+
+    from virtudoc.indexer.parsers import ParseError, parse_file
+
+    assert parse_file(tmp_path / "a.md", "# T\n").blocks[0].kind == "heading"
+    assert parse_file(tmp_path / "a.rst", "Title\n=====\n\nBody\n").blocks[0].kind == "heading"
+    assert parse_file(tmp_path / "a.html", "<p>x</p>").blocks[0].kind == "para"
+    assert parse_file(tmp_path / "a.txt", "text\n").blocks[0].kind == "para"
+    with pytest.raises(ParseError, match="unsupported extension"):
+        parse_file(tmp_path / "a.pdf", "x")

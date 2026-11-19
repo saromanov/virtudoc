@@ -62,3 +62,15 @@ def test_notes_removed_with_library(conn, lib):
 
     delete_library(conn, "demo")
     assert list_notes(conn, lib) == []
+
+
+def test_relevant_notes_empty_query(conn, lib):
+    add_note(conn, lib, "Middleware note.")
+    assert relevant_notes(conn, lib, " ,, ") == []
+
+
+def test_relevant_notes_truncates_oversized_first_note(conn, lib):
+    add_note(conn, lib, "middleware " * 500)
+    notes = relevant_notes(conn, lib, "middleware", budget_tokens=60)
+    assert len(notes) == 1
+    assert notes[0].text.endswith("…")

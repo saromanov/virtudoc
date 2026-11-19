@@ -118,3 +118,51 @@ def test_walk_order_and_hidden_dirs(tmp_path):
     )
     walked = walk_source(source)
     assert [f.rel_path for f in walked.files] == ["a/x.md", "b.md", "c.txt"]
+
+
+def test_ignore_pattern_double_star_without_slash_and_question_mark():
+    from virtudoc.indexer.walker import _compile_pattern
+
+    rx = _compile_pattern("a**b.md")
+    assert rx.search("a/x/b.md")
+    assert rx.search("ab.md")
+    assert not rx.search("ab.txt")
+
+    rx = _compile_pattern("file?.md")
+    assert rx.search("file1.md")
+    assert not rx.search("file10.md")
+
+
+def test_ignore_file_comments_and_empty_patterns(tmp_path):
+    source = tmp_path / "docs"
+    _tree(
+        source,
+        {
+            f"{IGNORE_FILE}": "\n# a comment\n!\n",
+            "keep.md": "# Keep\n",
+        },
+    )
+    walked = walk_source(source)
+    assert [f.rel_path for f in walked.files] == ["keep.md"]
+
+
+def test_walk_skips_large_files(tmp_path, monkeypatch):
+    from virtudoc.indexer import walker
+
+    monkeypatch.setattr(walker, "MAX_FILE_SIZE", 10)
+    source = tmp_path / "docs"
+    _tree(source, {"big.md": "x" * 100, "ok.md": "# Ok\n"})
+    walked = walk_source(source)
+    assert walked.skipped_large == ["big.md"]
+    assert [f.rel_path for f in walked.files] == ["ok.md"]
+
+
+def test_walk_ignores_files_with_broken_stat(tmp_path):
+    import os
+
+    source = tmp_path / "docs"
+    source.mkdir()
+    (source / "ok.md").write_text("# Ok\n", encoding="utf-8")
+    os.symlink(source / "missing.md", source / "broken.md")
+    walked = walk_source(source)
+    assert [f.rel_path for f in walked.files] == ["ok.md"]

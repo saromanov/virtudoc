@@ -122,3 +122,59 @@ def test_init_without_manifest(home, tmp_path, capsys):
     err = capsys.readouterr().err
     assert "no dependency manifest found" in err
     assert "pyproject.toml" in err
+
+
+def test_link_matches_reports_errors(conn, tmp_path, monkeypatch):
+    from virtudoc.onboarding import (
+        DependencyEntry,
+        LibraryMatch,
+        ProjectScan,
+        link_matches,
+    )
+
+    manifest = tmp_path / "requirements.txt"
+    manifest.write_text("demo==1.0\n", encoding="utf-8")
+    scan = ProjectScan(
+        project_path=tmp_path,
+        matches=[
+            LibraryMatch(
+                library_id="local/demo",
+                library_name="demo",
+                doc_version="1.0",
+                dependency=DependencyEntry("demo", "1.0", manifest),
+                status="match",
+            )
+        ],
+    )
+
+    def fail(*args, **kwargs):
+        raise ValueError("manifest broke")
+
+    monkeypatch.setattr("virtudoc.onboarding.link_library", fail)
+    linked, errors = link_matches(conn, scan)
+    assert linked == []
+    assert errors == ["local/demo: manifest broke"]
+
+
+def test_format_report_without_manifests_or_dependencies(tmp_path):
+    from virtudoc.onboarding import ProjectScan, format_report
+
+    lines = format_report(ProjectScan(project_path=tmp_path), [], False)
+    assert "manifests scanned: none" in lines
+    assert "matched libraries: none" in lines
+    assert "unmatched dependencies: none" in lines
+    assert "links: unchanged (pass --link to link matched libraries)" in lines
+    assert "linked: none" in format_report(ProjectScan(project_path=tmp_path), [], True)
+
+
+def test_format_report_limits_unmatched_hints(tmp_path):
+    from virtudoc.onboarding import DependencyEntry, ProjectScan, format_report
+
+    manifest = tmp_path / "requirements.txt"
+    scan = ProjectScan(
+        project_path=tmp_path,
+        unmatched=[DependencyEntry(f"dep{index}", "1.0", manifest) for index in range(12)],
+    )
+    lines = format_report(scan, [], False)
+    assert "unmatched dependencies (12):" in lines
+    assert "  ... and 2 more" in lines

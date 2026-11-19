@@ -251,3 +251,66 @@ def test_library_outline_dict_shape(indexed, conn):
     payload = tree[0].to_dict()
     assert set(payload) == {"section", "path", "chunk_count", "token_est", "children"}
     assert payload["path"]
+
+
+def test_stem_covers_short_cyrillic_tokens():
+    from virtudoc.search.engine import _stem
+
+    assert _stem("абвгдж") == "абвг"
+    assert _stem("абвгд") == "абвг"
+    assert _stem("аб") == "аб"
+    assert _stem("middleware") == "middleware"
+
+
+def test_fetch_candidates_honours_limit(conn):
+    from virtudoc.search.engine import _fetch_candidates
+
+    assert _fetch_candidates(conn, '"x"', None, limit=1) == []
+
+
+def test_find_all_with_empty_needle_and_window_without_hits():
+    from virtudoc.search.engine import _best_window, _find_all
+
+    assert _find_all("текст", "") == []
+    text = "короткий текст без совпадений"
+    assert _best_window(text, ["отсутствует"], 50) == (0, len(text))
+
+
+def test_search_empty_query_returns_nothing(conn):
+    result = search(conn, " ,, ")
+    assert result.snippets == []
+    assert result.total_matches == 0
+
+
+def test_search_zero_max_results_keeps_total_matches(indexed, conn):
+    result = search(conn, "middleware", max_results=0)
+    assert result.snippets == []
+    assert result.total_matches > 0
+    assert result.has_more is True
+
+
+def test_resolve_libraries_on_empty_index(conn):
+    from virtudoc.search.engine import resolve_libraries
+
+    assert resolve_libraries(conn, "demo", "query") == []
+
+
+def test_resolve_libraries_scores_exact_substring_and_fuzzy(indexed, conn):
+    from virtudoc.search.engine import resolve_libraries
+
+    exact = resolve_libraries(conn, "demo", "")
+    assert exact[0].id == "local/demo"
+    assert exact[0].score == 3.0
+
+    substring = resolve_libraries(conn, "dem", "")
+    assert substring[0].id == "local/demo"
+    assert substring[0].score == 2.0
+
+    conn.execute(
+        "INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+        " VALUES ('local/alpha', 'alpha', '/tmp', 't', 't')"
+    )
+    conn.commit()
+    fuzzy = resolve_libraries(conn, "alpah", "")
+    assert fuzzy[0].id == "local/alpha"
+    assert 0.5 <= fuzzy[0].score < 2.0
