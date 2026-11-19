@@ -100,6 +100,14 @@ def test_search_unknown_library(home, capsys):
     assert "not found" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("tokens", ["0", "-5"])
+def test_search_rejects_non_positive_token_budget(home, docs_dir, capsys, tokens):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+    assert main(["search", "middleware", "--tokens", tokens]) == 1
+    assert "token budget must be a positive number" in capsys.readouterr().err
+
+
 def test_search_pagination_metadata(home, tmp_path, capsys):
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text("[search]\nmax_results = 2\n", encoding="utf-8")
@@ -275,6 +283,29 @@ def test_import_missing_source_fails_cleanly(home, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "failed: 1" in captured.out
     assert "source directory not found" in captured.err
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[libraries]\ndemo = "x"\n',
+        'libraries = ["demo"]\n',
+    ],
+)
+def test_import_reports_malformed_entries(home, tmp_path, capsys, content):
+    setup = tmp_path / "setup.toml"
+    setup.write_text(content, encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    captured = capsys.readouterr()
+    assert "failed: 1" in captured.out
+    assert "malformed entry" in captured.err
+
+
+def test_import_rejects_non_list_libraries(home, tmp_path, capsys):
+    setup = tmp_path / "setup.toml"
+    setup.write_text("libraries = 5\n", encoding="utf-8")
+    assert main(["import", str(setup)]) == 1
+    assert "'libraries' must be a list of tables" in capsys.readouterr().err
 
 
 def test_import_default_path(home, docs_dir, capsys):
@@ -529,7 +560,7 @@ def test_import_rejects_non_array_libraries(home, tmp_path, capsys):
     setup = tmp_path / "bad-shape.toml"
     setup.write_text('libraries = "oops"\n', encoding="utf-8")
     assert main(["import", str(setup)]) == 1
-    assert "'libraries' must be an array of tables" in capsys.readouterr().err
+    assert "'libraries' must be a list of tables" in capsys.readouterr().err
 
 
 def test_import_rejects_non_table_entries(home, tmp_path, capsys):
@@ -537,7 +568,7 @@ def test_import_rejects_non_table_entries(home, tmp_path, capsys):
     setup.write_text('libraries = ["oops"]\n', encoding="utf-8")
     assert main(["import", str(setup)]) == 1
     captured = capsys.readouterr()
-    assert "entry is not a table" in captured.err
+    assert "malformed entry" in captured.err
     assert "failed: 1" in captured.out
 
 

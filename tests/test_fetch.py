@@ -51,6 +51,17 @@ def test_fetch_from_tarball(home, tmp_path):
     assert (cache_path("tarlib") / "a.md").is_file()
 
 
+def test_fetch_tarball_with_dot_root_entry(home, tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.md").write_text("# A\n\nТекст.\n", encoding="utf-8")
+    archive = tmp_path / "dot-root.tar"
+    with tarfile.open(archive, "w") as tf:
+        tf.add(source, arcname=".")
+    assert main(["fetch", "--repo", archive.as_uri(), "--name", "dotroot"]) == 0
+    assert (cache_path("dotroot") / "a.md").is_file()
+
+
 def test_fetch_rejects_zip_slip(home, tmp_path):
     archive = tmp_path / "evil.zip"
     with zipfile.ZipFile(archive, "w") as zf:
@@ -554,3 +565,12 @@ def test_fetch_git_clone_terminates_options(home, tmp_path, monkeypatch):
     fetch_source(url, "clone-args")
     clone = next(args for args in calls if "clone" in args)
     assert clone[clone.index("--") + 1 : clone.index("--") + 2] == [url]
+
+
+def test_fetch_zip_with_dot_root_entry(home, tmp_path):
+    archive = tmp_path / "dot-root.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("./", "")
+        zf.writestr("index.md", "# Root\n")
+    fetch_source(archive.as_uri(), "zip-dot-root")
+    assert (cache_path("zip-dot-root") / "index.md").is_file()

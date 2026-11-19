@@ -230,6 +230,25 @@ def test_reindex_unknown_library(conn):
         reindex_library(conn, "local/nope", Chunker())
 
 
+def test_failed_reindex_keeps_previous_index(conn, docs_dir, monkeypatch):
+    from virtudoc.indexer import indexer as indexer_module
+
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    before = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert before > 0
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("indexing failed")
+
+    monkeypatch.setattr(indexer_module, "_index_library", boom)
+    with pytest.raises(RuntimeError, match="indexing failed"):
+        reindex_library(conn, lib_id, Chunker())
+
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == before
+    assert conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0] == before
+
+
 def _age_sources(docs_dir, seconds: float) -> None:
     """Set every source mtime into the past, simulating 'indexed after edit'."""
     old = time.time() - seconds
@@ -520,6 +539,6 @@ def test_clear_library_index_commits_by_default(conn, docs_dir):
 
     lib_id = add_library(conn, docs_dir, "demo")
     index_library(conn, lib_id, Chunker())
-    clear_library_index(conn, lib_id, commit=True)
+    clear_library_index(conn, lib_id)
     assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0

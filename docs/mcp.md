@@ -179,7 +179,8 @@ Fragments mode returns:
   `version_mismatch` block naming both versions and the manifest.
 - When nothing matches, `snippets` is empty and `sections` lists the
   library's top-level sections to help rephrase the query.
-- Exceeding the budget is not an error: output is cut at a chunk boundary.
+- Exceeding the budget is not an error: the page ends before the next
+  fragment, and a fragment larger than the whole budget is truncated.
 
 Outline mode (`mode: "outline"`) returns the section tree with chunk counts
 and token estimates instead of fragments — the agent can plan what to load

@@ -147,6 +147,15 @@ def test_topic_boost_prefers_matching_section(indexed, conn):
     assert paths[0] == "Руководство → API → Middleware"
 
 
+def test_search_max_results_zero_reports_no_more_pages(tmp_path, conn):
+    lib_id = _paginated_library(tmp_path, conn)
+
+    result = search(conn, "paginationmarker", library_id=lib_id, max_results=0)
+    assert result.snippets == []
+    assert result.total_matches == 7
+    assert result.has_more is False
+
+
 def test_search_in_cyrillic_text(indexed, conn):
     result = search(conn, "очередь подписчикам")
     assert result.snippets
@@ -202,6 +211,35 @@ def test_search_section_filter(indexed, conn):
     assert any(s.heading_path.startswith("Руководство → API") for s in unfiltered.snippets)
 
 
+def test_search_section_filter_accepts_ascii_arrow(indexed, conn):
+    result = search(conn, "исключения", section="Руководство -> API -> Ошибки")
+    assert result.snippets
+    assert all(s.heading_path.startswith("Руководство → API → Ошибки") for s in result.snippets)
+
+
+def test_section_filter_matches_heading_with_ascii_arrow_in_text(tmp_path, conn):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    src = tmp_path / "arrowdocs"
+    src.mkdir()
+    (src / "states.md").write_text(
+        "# Guide\n\n## Input -> Output\n\narrowmarker describes the transition.\n",
+        encoding="utf-8",
+    )
+    lib_id = add_library(conn, src, "arrow")
+    index_library(conn, lib_id, Chunker())
+
+    for section in ("Guide -> Input -> Output", "Guide → Input -> Output"):
+        result = search(conn, "arrowmarker", library_id=lib_id, section=section)
+        assert result.snippets
+        assert result.snippets[0].heading_path == "Guide → Input -> Output"
+
+    tree = library_outline(conn, lib_id, section="Guide -> Input -> Output")
+    assert [node.section for node in tree] == ["Guide"]
+    assert [child.section for child in tree[0].children] == ["Input -> Output"]
+
+
 def test_language_boost_prefers_code_language(indexed, conn, tmp_path):
     from virtudoc.indexer.chunker import Chunker
     from virtudoc.indexer.indexer import add_library, index_library
@@ -244,6 +282,12 @@ def test_library_outline_section_filter(indexed, conn):
     assert tree[0].section == "Руководство"
     assert len(tree[0].children) == 1
     assert tree[0].children[0].section == "API"
+
+
+def test_library_outline_section_filter_accepts_ascii_arrow(indexed, conn):
+    tree = library_outline(conn, "local/demo", section="Руководство -> API")
+    assert [node.section for node in tree] == ["Руководство"]
+    assert [child.section for child in tree[0].children] == ["API"]
 
 
 def test_library_outline_dict_shape(indexed, conn):
