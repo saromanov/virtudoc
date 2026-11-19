@@ -15,12 +15,17 @@ def estimate_tokens(text: str) -> int:
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    if max_tokens <= 0:
+        return ""
     if estimate_tokens(text) <= max_tokens:
         return text
+    limit = max_tokens - 1  # reserve one token for the ellipsis mark
+    if limit == 0:
+        return "…"
     lo, hi = 0, len(text)
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if estimate_tokens(text[:mid]) <= max_tokens:
+        if estimate_tokens(text[:mid]) <= limit:
             lo = mid
         else:
             hi = mid - 1

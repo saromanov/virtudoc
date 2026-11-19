@@ -38,3 +38,16 @@ def test_truncate_mixed_text_respects_budget():
 
 def test_truncate_short_text_unchanged():
     assert truncate_to_tokens("короткий текст", 100) == "короткий текст"
+
+
+def test_truncate_stays_strictly_within_budget():
+    text = ("абвгд" * 400) + ("x" * 400)
+    for budget in (1, 2, 10, 50, 100):
+        truncated = truncate_to_tokens(text, budget)
+        assert estimate_tokens(truncated) <= budget
+        assert truncated.endswith("…")
+
+
+def test_truncate_non_positive_budget_is_empty():
+    assert truncate_to_tokens("текст", 0) == ""
+    assert truncate_to_tokens("текст", -5) == ""
