@@ -514,3 +514,43 @@ def test_tar_member_without_stream_is_clean_error(home, tmp_path, monkeypatch):
     with tarfile.open(archive) as tf:
         with pytest.raises(FetchError, match="cannot extract archive member"):
             _safe_extract_tar(tf, tmp_path / "out")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "--upload-pack=/tmp/evil",
+        "ext::sh -c 'touch /tmp/pwned'",
+        "fd::/tmp/socket",
+    ],
+)
+def test_fetch_rejects_unsafe_git_urls(home, url):
+    with pytest.raises(ValueError, match=r"invalid git URL|unsupported git transport"):
+        fetch_source(url, "unsafe")
+
+
+def test_fetch_rejects_option_like_branch(home, tmp_path):
+    repo = _docs_zip(tmp_path)
+    with pytest.raises(ValueError, match="invalid branch name"):
+        fetch_source(repo.as_uri(), "branch-option", branch="--upload-pack=x")
+
+
+def test_fetch_rejects_non_http_archive_scheme(home):
+    with pytest.raises(ValueError, match="unsupported archive URL scheme"):
+        fetch_source("ftp://example.com/docs.zip", "ftp-archive")
+
+
+def test_fetch_git_clone_terminates_options(home, tmp_path, monkeypatch):
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    calls = []
+
+    def fake_run(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(fetcher_module, "_run_git", fake_run)
+    url = "https://example.com/docs.git"
+    fetch_source(url, "clone-args")
+    clone = next(args for args in calls if "clone" in args)
+    assert clone[clone.index("--") + 1 : clone.index("--") + 2] == [url]

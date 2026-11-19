@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -38,6 +39,26 @@ def cache_path(name: str) -> Path:
     return data_dir() / "fetch" / name
 
 
+_ALLOWED_ARCHIVE_SCHEMES = ("http://", "https://", "file://")
+
+_REMOTE_HELPER = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*::")
+
+
+def _validate_git_url(url: str) -> None:
+    """Reject git transports and URLs that can execute commands or act as options."""
+    if not url or url.startswith("-"):
+        raise ValueError(f"invalid git URL: {url!r}")
+    if _REMOTE_HELPER.match(url):
+        raise ValueError(
+            f"unsupported git transport in {url!r}; use https, ssh, git or a local path"
+        )
+
+
+def _validate_archive_url(url: str) -> None:
+    if not url.lower().startswith(_ALLOWED_ARCHIVE_SCHEMES):
+        raise ValueError(f"unsupported archive URL scheme in {url!r}; use http(s) or file")
+
+
 def fetch_source(
     repo_url: str,
     name: str,
@@ -53,9 +74,12 @@ def fetch_source(
     the branch in the URL already.
     """
     validate_name(name)
+    if branch and branch.startswith("-"):
+        raise ValueError(f"invalid branch name: {branch!r}")
     dest = cache_path(name)
     lower = repo_url.lower().split("?", 1)[0]
     if lower.endswith((".zip", ".tar.gz", ".tgz", ".tar")):
+        _validate_archive_url(repo_url)
         max_extract_bytes = MAX_EXTRACT_BYTES if max_extract_bytes is None else max_extract_bytes
         max_extract_files = MAX_EXTRACT_FILES if max_extract_files is None else max_extract_files
         if max_extract_bytes <= 0 or max_extract_files <= 0:
@@ -323,7 +347,13 @@ def ensure_pinned_checkout(dest: Path) -> str | None:
 
 def _run_git(args: list[str]) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=GIT_TIMEOUT)
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
     except subprocess.TimeoutExpired as exc:
         raise FetchError(
             f"git command timed out after {GIT_TIMEOUT}s: {' '.join(args[:4])}"
@@ -331,6 +361,7 @@ def _run_git(args: list[str]) -> subprocess.CompletedProcess:
 
 
 def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
+    _validate_git_url(url)
     if shutil.which("git") is None:
         raise FetchError("git is not installed; cannot clone repositories")
     if (dest / ".git").is_dir():
@@ -359,7 +390,7 @@ def _fetch_git(url: str, dest: Path, branch: str | None = None) -> None:
     cmd = ["git", "clone", "--depth", "1"]
     if branch:
         cmd += ["--branch", branch]
-    cmd += [url, str(dest)]
+    cmd += ["--", url, str(dest)]
     try:
         result = _run_git(cmd)
     except FetchError:
