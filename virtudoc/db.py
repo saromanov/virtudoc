@@ -28,7 +28,30 @@ def connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _schema_ready(conn: sqlite3.Connection) -> bool:
+    if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        return False
+    names = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+    }
+    required = {
+        "libraries",
+        "documents",
+        "chunks",
+        "chunks_fts",
+        "chunks_tri",
+        "notes",
+        "project_links",
+        "meta",
+    }
+    return required <= names
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
+    if _schema_ready(conn):
+        # Serving opens the database on every tool call; do not write to it.
+        return
     tri_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_tri'").fetchone()
     conn.executescript(
         """
@@ -99,8 +122,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-
-        INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '1');
         """
     )
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
@@ -109,10 +130,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if not tri_existed:
         # the trigram table was just created — backfill it for pre-v3 rows
         conn.execute("INSERT INTO chunks_tri (rowid, text) SELECT id, text FROM chunks")
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
-        (str(SCHEMA_VERSION),),
-    )
+    current = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    if current is None or current[0] != str(SCHEMA_VERSION):
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

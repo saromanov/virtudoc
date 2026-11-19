@@ -209,3 +209,19 @@ def test_open_db_idempotent(tmp_path):
     c1.close()
     c2 = open_db(path)
     c2.close()
+
+
+def test_init_schema_does_not_write_when_schema_is_current(tmp_path):
+    connection = open_db(tmp_path / "ro.db")
+    connection.execute("PRAGMA query_only=ON")
+    init_schema(connection)  # must not attempt any write
+    row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    assert row[0] == "3"
+
+
+def test_init_schema_recreates_a_missing_table(tmp_path):
+    connection = open_db(tmp_path / "missing-table.db")
+    connection.execute("DROP TABLE notes")
+    connection.commit()
+    init_schema(connection)
+    assert connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes'").fetchone()
