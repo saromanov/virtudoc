@@ -161,7 +161,11 @@ def cmd_list(args: argparse.Namespace, cfg: Config) -> int:
 def cmd_remove(args: argparse.Namespace, cfg: Config) -> int:
     lib_id = f"local/{args.name}"
     if not args.yes:
-        answer = input(f"Remove library {lib_id} and all its data? [y/N] ")
+        try:
+            answer = input(f"Remove library {lib_id} and all its data? [y/N] ")
+        except EOFError:
+            print("cancelled (non-interactive shell: pass --yes to remove)")
+            return 0
         if answer.strip().lower() not in ("y", "yes"):
             print("cancelled")
             return 0

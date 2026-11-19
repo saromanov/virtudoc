@@ -128,7 +128,10 @@ default environment, so the data directory is `~/.virtudoc` — set
 - `get-library-docs(libraryId, query, tokens=5000, language, page, mode,
   section)` — Markdown fragments with heading paths and source file paths,
   assembled under the token budget. `total_matches` and `has_more` describe
-  pagination; `page=N+1` continues the ranking. Relevant project notes are
+  pagination; `page=N+1` continues the ranking. `section` restricts the
+  answer to a heading branch and takes a path, e.g.
+  `"Guide → Authentication"` or a top-level branch name (`"Guide"`) — a
+  bare leaf name alone does not match. Relevant project notes are
   included before the fragments. Empty results return the library's
   top-level sections to help rephrase the query.
 
