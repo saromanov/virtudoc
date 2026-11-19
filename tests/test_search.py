@@ -314,3 +314,21 @@ def test_resolve_libraries_scores_exact_substring_and_fuzzy(indexed, conn):
     fuzzy = resolve_libraries(conn, "alpah", "")
     assert fuzzy[0].id == "local/alpha"
     assert 0.5 <= fuzzy[0].score < 2.0
+
+
+def test_top_level_sections_include_headingless_chunks(tmp_path, conn):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.search.engine import top_level_sections
+
+    source = tmp_path / "flat"
+    source.mkdir()
+    (source / "notes.txt").write_text(
+        "Первый абзац без заголовка.\n\nВторой абзац без заголовка.\n", encoding="utf-8"
+    )
+    lib_id = add_library(conn, source, "flat")
+    index_library(conn, lib_id, Chunker())
+
+    hints = top_level_sections(conn, lib_id)
+    assert [hint.section for hint in hints] == ["(no section)"]
+    assert hints[0].chunk_count > 0

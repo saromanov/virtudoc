@@ -440,12 +440,12 @@ def top_level_sections(
     for row in conn.execute(
         """
         SELECT heading_path, COUNT(*), SUM(token_est) FROM chunks
-        WHERE library_id = ? AND heading_path != ''
+        WHERE library_id = ?
         GROUP BY heading_path
         """,
         (library_id,),
     ):
-        root = row[0].split(" → ")[0].strip()
+        root = row[0].split(" → ")[0].strip() or "(no section)"
         hint = roots.setdefault(root, SectionHint(root, 0, 0))
         hint.chunk_count += row[1]
         hint.token_est += row[2] or 0
