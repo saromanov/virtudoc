@@ -5,10 +5,18 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/virtudoc)](https://pypi.org/project/virtudoc/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/saromanov/virtudoc/blob/main/LICENSE)
 
-A local documentation server for AI agents. It indexes documentation from
-local directories into SQLite with FTS5 full-text search and serves relevant
-fragments to an agent through MCP tools. Fully offline: no network access
-happens in any mode.
+<p align="center"><img src="demo.gif" alt="virtudoc demo" width="720"></p>
+
+**The problem it solves.** Coding agents re-download the same documentation
+every session, work only with public APIs, and invent your internal
+interfaces because your private docs were never reachable. VirtuDoc fixes the
+context side: your documentation is indexed once, locally, and served to any
+MCP client — verified fragments, not model guesses.
+
+VirtuDoc is a local documentation server for AI agents. It indexes
+documentation from local directories into SQLite with FTS5 full-text search
+and serves relevant fragments to an agent through MCP tools. Fully offline:
+no network access happens in any mode.
 
 Private and internal docs never leave your computer: there are no API keys,
 request limits, or cloud dependencies.
@@ -127,6 +135,25 @@ default environment, so the data directory is `~/.virtudoc` — set
 Optionally expose the server over streamable HTTP on 127.0.0.1 for clients
 without stdio support: `virtudoc serve --http [port]` (default port 8765).
 
+## Why not Context7 or a RAG index?
+
+- **Hosted doc servers (Context7 and similar)** serve public documentation
+  from the network. VirtuDoc indexes the docs you actually work with: private
+  repos, internal specs, vendored doc trees. Nothing leaves your machine —
+  no API keys and no rate limits.
+- **Embedding-based RAG** needs an embedding model, a vector store and
+  re-embedding on every doc change. VirtuDoc is SQLite FTS5 with BM25: one
+  `pip install`, incremental indexing by content hash, and deterministic
+  results — the same query returns the same fragments.
+- **Documentation structure fits BM25 better than similarity search:**
+  chunks are cut along headings, results carry their section path, and the
+  token budget is respected exactly — so an agent gets a predictable,
+  bounded context.
+
+If you only consume public docs and prefer hosted infrastructure, Context7
+is a good fit. If your documentation is private, internal or must stay
+offline, that is the gap VirtuDoc closes.
+
 Supported formats: Markdown (`.md`, `.mdx`), reStructuredText (`.rst`),
 plain text (`.txt`), HTML (`.html`, `.htm`, best-effort text extraction).
 Hidden files and directories are always skipped; a `.virtudocignore` file at
@@ -190,7 +217,7 @@ ruff format virtudoc tests
 Milestones M1 (core: indexing, chunking, FTS5 search, CLI) and M2 (MCP
 server over stdio/HTTP, project notes, outline mode, `.virtudocignore`) are
 done, plus `link`/`doctor` version drift warnings and the `fetch` command.
-Published on PyPI; a demo screencast is planned.
+Published on PyPI.
 
 ## License
 
