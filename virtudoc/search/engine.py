@@ -21,6 +21,7 @@ TOPIC_BONUS = 0.25
 LANGUAGE_BONUS = 0.15
 # A topic prefix shorter than this matches too many unrelated headings.
 MIN_TOPIC_PREFIX = 4
+NO_SECTION = "(no section)"
 
 
 @dataclass
@@ -187,6 +188,8 @@ def normalize_section(section: str | None) -> str | None:
 def _section_path_matches(path: str | None, section: str) -> bool:
     """True when ``path`` is ``section`` or one of its descendants."""
     canonical = normalize_section(path)
+    if canonical is None and not (path or "").strip():
+        canonical = NO_SECTION
     if canonical is None:
         return False
     return canonical == section or canonical.startswith(section + " → ")
@@ -471,7 +474,7 @@ def top_level_sections(
         """,
         (library_id,),
     ):
-        root = row[0].split(" → ")[0].strip() or "(no section)"
+        root = row[0].split(" → ")[0].strip() or NO_SECTION
         hint = roots.setdefault(root, SectionHint(root, 0, 0))
         hint.chunk_count += row[1]
         hint.token_est += row[2] or 0
@@ -517,7 +520,7 @@ def library_outline(
     for path, count, tokens in rows:
         if section and not _section_path_matches(path, section):
             continue
-        parts = path.split(" → ") if path else ["(no section)"]
+        parts = path.split(" → ") if path else [NO_SECTION]
         for index, part in enumerate(parts):
             prefix = " → ".join(parts[: index + 1])
             node = nodes.get(prefix)

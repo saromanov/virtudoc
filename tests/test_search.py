@@ -376,3 +376,22 @@ def test_top_level_sections_include_headingless_chunks(tmp_path, conn):
     hints = top_level_sections(conn, lib_id)
     assert [hint.section for hint in hints] == ["(no section)"]
     assert hints[0].chunk_count > 0
+
+
+def test_section_filter_selects_headingless_chunks(tmp_path, conn):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    source = tmp_path / "flat"
+    source.mkdir()
+    (source / "notes.txt").write_text(
+        "Первый абзац с маркером.\n\nВторой абзац без заголовка.\n", encoding="utf-8"
+    )
+    lib_id = add_library(conn, source, "flat")
+    index_library(conn, lib_id, Chunker())
+
+    result = search(conn, "маркером", library_id=lib_id, section="(no section)")
+    assert result.snippets
+
+    tree = library_outline(conn, lib_id, section="(no section)")
+    assert [node.section for node in tree] == ["(no section)"]

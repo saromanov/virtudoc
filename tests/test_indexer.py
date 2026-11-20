@@ -161,6 +161,8 @@ def test_invalid_name_rejected(conn, docs_dir):
         add_library(conn, docs_dir, "Плохое Имя")
     with pytest.raises(ValueError):
         add_library(conn, docs_dir, "-bad")
+    with pytest.raises(ValueError):
+        add_library(conn, docs_dir, "demo\n")
 
 
 def test_missing_source_rejected(conn, tmp_path):

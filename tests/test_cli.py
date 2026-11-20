@@ -178,6 +178,15 @@ def test_remove_requires_confirmation(home, docs_dir, capsys, monkeypatch):
     assert "cancelled" in capsys.readouterr().out
 
 
+def test_remove_accepts_the_full_library_id(home, docs_dir, capsys):
+    main(["add", str(docs_dir), "--name", "demo"])
+    capsys.readouterr()
+    assert main(["remove", "local/demo", "--yes"]) == 0
+    assert "removed library local/demo" in capsys.readouterr().out
+    assert main(["list"]) == 0
+    assert "no libraries registered" in capsys.readouterr().out
+
+
 def test_note_lifecycle_in_search_output(home, docs_dir, capsys):
     assert main(["add", str(docs_dir), "--name", "demo"]) == 0
     capsys.readouterr()

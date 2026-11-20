@@ -159,7 +159,7 @@ def cmd_list(args: argparse.Namespace, cfg: Config) -> int:
 
 
 def cmd_remove(args: argparse.Namespace, cfg: Config) -> int:
-    lib_id = f"local/{args.name}"
+    lib_id = args.name if args.name.startswith("local/") else f"local/{args.name}"
     if not args.yes:
         try:
             answer = input(f"Remove library {lib_id} and all its data? [y/N] ")

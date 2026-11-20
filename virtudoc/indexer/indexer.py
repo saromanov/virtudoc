@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from ..db import delete_document_chunks, insert_chunk, utc_now
+from ..db import (
+    delete_document_chunks,
+    delete_library_chunks_fts,
+    insert_chunk,
+    utc_now,
+)
 from ..logging_setup import get_logger
 from .chunker import Chunker
 from .parsers import ParseError, parse_file
@@ -90,7 +95,7 @@ def _drop_document(conn: sqlite3.Connection, document_id: int) -> None:
 
 
 def validate_name(name: str) -> None:
-    if not _NAME_RE.match(name):
+    if not _NAME_RE.fullmatch(name):
         raise ValueError(
             f"invalid library name '{name}': use lowercase latin letters, "
             "digits, hyphens and underscores"
@@ -159,15 +164,8 @@ def add_library(
 
 
 def delete_library(conn: sqlite3.Connection, name: str) -> None:
-    lib_id = library_id(name)
-    conn.execute(
-        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
-        (lib_id,),
-    )
-    conn.execute(
-        "DELETE FROM chunks_tri WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
-        (lib_id,),
-    )
+    lib_id = name if name.startswith("local/") else library_id(name)
+    delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.execute("DELETE FROM meta WHERE key = ?", (_failure_key(lib_id),))
     conn.commit()
@@ -347,14 +345,7 @@ def add_and_index_library(
 
 
 def _clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
-    conn.execute(
-        "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
-        (lib_id,),
-    )
-    conn.execute(
-        "DELETE FROM chunks_tri WHERE rowid IN (SELECT id FROM chunks WHERE library_id = ?)",
-        (lib_id,),
-    )
+    delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM documents WHERE library_id = ?", (lib_id,))
 
 

@@ -26,6 +26,7 @@ class UnsupportedSQLiteError(RuntimeError):
 
 def require_sqlite(version_info: tuple[int, ...] | None = None) -> None:
     info = tuple(version_info or sqlite3.sqlite_version_info[:3])
+    info = (*info, 0, 0, 0)[:3]
     if info < MIN_SQLITE_VERSION:
         found = ".".join(str(part) for part in info)
         raise UnsupportedSQLiteError(
@@ -66,10 +67,20 @@ def _schema_ready(conn: sqlite3.Connection) -> bool:
     return required <= names
 
 
+def _backfill_fts(conn: sqlite3.Connection, table: str) -> None:
+    """Populate a recreated external-content FTS table with normalized text."""
+    rows = conn.execute("SELECT id, text FROM chunks").fetchall()
+    conn.executemany(
+        f"INSERT INTO {table} (rowid, text) VALUES (?, ?)",
+        [(rowid, fts_normalize(text)) for rowid, text in rows],
+    )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     if _schema_ready(conn):
         # Serving opens the database on every tool call; do not write to it.
         return
+    fts_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'").fetchone()
     tri_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_tri'").fetchone()
     conn.executescript(
         """
@@ -145,9 +156,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
     if columns and "lang" not in columns:
         conn.execute("ALTER TABLE chunks ADD COLUMN lang TEXT NOT NULL DEFAULT ''")
+    if not fts_existed:
+        # the FTS table was just recreated — restore pre-v3 rows
+        _backfill_fts(conn, "chunks_fts")
     if not tri_existed:
         # the trigram table was just created — backfill it for pre-v3 rows
-        conn.execute("INSERT INTO chunks_tri (rowid, text) SELECT id, text FROM chunks")
+        _backfill_fts(conn, "chunks_tri")
     current = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if current is None or current[0] != str(SCHEMA_VERSION):
         conn.execute(
@@ -166,15 +180,35 @@ def open_db(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _delete_fts_rows(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> None:
+    # External-content FTS5 removes the tokens of the supplied text, not the
+    # text stored in the content table. The index stores normalized text, so
+    # a plain DELETE would leave the "ё" → "е" form behind and a later rowid
+    # reuse would surface it as a false match.
+    normalized = [(row["id"], fts_normalize(row["text"])) for row in rows]
+    conn.executemany(
+        "INSERT INTO chunks_fts (chunks_fts, rowid, text) VALUES ('delete', ?, ?)",
+        normalized,
+    )
+    conn.executemany(
+        "INSERT INTO chunks_tri (chunks_tri, rowid, text) VALUES ('delete', ?, ?)",
+        normalized,
+    )
+
+
 def delete_document_chunks(conn: sqlite3.Connection, document_id: int) -> None:
-    chunk_ids = [
-        row[0]
-        for row in conn.execute("SELECT id FROM chunks WHERE document_id = ?", (document_id,))
-    ]
-    for chunk_id in chunk_ids:
-        conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (chunk_id,))
-        conn.execute("DELETE FROM chunks_tri WHERE rowid = ?", (chunk_id,))
+    rows = conn.execute(
+        "SELECT id, text FROM chunks WHERE document_id = ?", (document_id,)
+    ).fetchall()
+    _delete_fts_rows(conn, rows)
     conn.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+
+
+def delete_library_chunks_fts(conn: sqlite3.Connection, library_id: str) -> None:
+    rows = conn.execute(
+        "SELECT id, text FROM chunks WHERE library_id = ?", (library_id,)
+    ).fetchall()
+    _delete_fts_rows(conn, rows)
 
 
 def insert_chunk(

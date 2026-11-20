@@ -5,6 +5,7 @@ import pytest
 from virtudoc.db import (
     connect,
     delete_document_chunks,
+    delete_library_chunks_fts,
     init_schema,
     insert_chunk,
     open_db,
@@ -102,7 +103,7 @@ def test_trigram_table_backfilled_for_pre_v3_dbs(home, tmp_path):
     conn.execute(
         "INSERT INTO chunks"
         " (document_id, library_id, heading_path, ord, text, token_est, code_ratio)"
-        " VALUES (?, 'local/old', '', 0, 'Служебный идентификатор middlewareAuth', 5, 0.0)",
+        " VALUES (?, 'local/old', '', 0, 'Служебный объём middlewareAuth', 5, 0.0)",
         (doc_id,),
     )
     conn.commit()
@@ -113,6 +114,10 @@ def test_trigram_table_backfilled_for_pre_v3_dbs(home, tmp_path):
         "SELECT rowid FROM chunks_tri WHERE chunks_tri MATCH '\"Auth\"'"
     ).fetchall()
     assert rows
+    yo_rows = migrated.execute(
+        "SELECT rowid FROM chunks_tri WHERE chunks_tri MATCH '\"объем\"'"
+    ).fetchall()
+    assert yo_rows, "the backfill must normalize ё like insert_chunk does"
     migrated.close()
 
 
@@ -204,6 +209,74 @@ def test_delete_document_removes_fts_rows(conn):
     assert tri_left == 0
 
 
+def test_delete_document_removes_normalized_fts_terms(conn):
+    doc_id = _insert_document(conn)
+    insert_chunk(
+        conn,
+        document_id=doc_id,
+        library_id="local/demo",
+        heading_path="",
+        ord_=0,
+        text="Объём уникальный",
+        token_est=5,
+        code_ratio=0.0,
+    )
+    conn.commit()
+    delete_document_chunks(conn, doc_id)
+    conn.commit()
+    for table in ("chunks_fts", "chunks_tri"):
+        rows = conn.execute(f"SELECT rowid FROM {table} WHERE {table} MATCH '\"объем\"'").fetchall()
+        assert rows == [], f"stale normalized term left in {table}"
+
+
+def test_delete_library_fts_removes_normalized_terms(conn):
+    doc_id = _insert_document(conn)
+    insert_chunk(
+        conn,
+        document_id=doc_id,
+        library_id="local/demo",
+        heading_path="",
+        ord_=0,
+        text="Объём библиотеки",
+        token_est=5,
+        code_ratio=0.0,
+    )
+    conn.commit()
+    delete_library_chunks_fts(conn, "local/demo")
+    conn.commit()
+    rows = conn.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH '\"объем\"'"
+    ).fetchall()
+    assert rows == []
+
+
+def test_recreated_fts_table_is_backfilled_with_normalized_text(home, tmp_path):
+    path = tmp_path / "recreated-fts.db"
+    connection = open_db(path)
+    doc_id = _insert_document(connection)
+    insert_chunk(
+        connection,
+        document_id=doc_id,
+        library_id="local/demo",
+        heading_path="",
+        ord_=0,
+        text="Объём после пересоздания",
+        token_est=5,
+        code_ratio=0.0,
+    )
+    connection.commit()
+    connection.execute("DROP TABLE chunks_fts")
+    connection.commit()
+    connection.close()
+
+    reopened = open_db(path)
+    rows = reopened.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH '\"объем\"'"
+    ).fetchall()
+    assert rows
+    reopened.close()
+
+
 def test_open_db_idempotent(tmp_path):
     path = tmp_path / "i.db"
     c1 = open_db(path)
@@ -233,6 +306,7 @@ def test_require_sqlite_rejects_old_versions():
     from virtudoc.db import UnsupportedSQLiteError, require_sqlite
 
     require_sqlite((3, 35, 0))
+    require_sqlite((3, 35))
     require_sqlite((3, 46, 1))
     with pytest.raises(UnsupportedSQLiteError, match=r"SQLite 3\.35"):
         require_sqlite((3, 34, 9))
