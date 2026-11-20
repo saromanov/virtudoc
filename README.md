@@ -25,11 +25,16 @@ request limits, or cloud dependencies.
 ## Installation
 
 ```bash
+pipx install virtudoc   # isolated CLI install, recommended
+# or
 pip install virtudoc
 ```
 
 Requires Python 3.11+. The only runtime dependencies are `markdown-it-py`
 (Markdown parsing) and the `mcp` SDK.
+
+Releases are built and published to PyPI by GitHub Actions on `v*` tags
+through OIDC trusted publishing — no tokens are stored in the repository.
 
 ## Quick start
 
