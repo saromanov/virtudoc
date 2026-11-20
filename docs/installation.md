@@ -10,8 +10,15 @@
 ## From PyPI
 
 ```bash
+pipx install virtudoc   # isolated CLI install, recommended
+# or
 pip install virtudoc
 ```
+
+Publishing is automated: pushing a `v*` tag runs
+`.github/workflows/release.yml`, which builds the distributions with
+`python -m build` and uploads them to PyPI via OIDC trusted publishing. No
+PyPI token is stored in the repository.
 
 ## From source
 
