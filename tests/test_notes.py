@@ -76,7 +76,7 @@ def test_relevant_notes_empty_query(conn, lib):
     assert relevant_notes(conn, lib, " ,, ") == []
 
 
-def test_relevant_notes_skip_oversized_note(conn, lib):
+def test_relevant_notes_skips_oversized_first_note(conn, lib):
     from virtudoc.notes import select_notes
 
     add_note(conn, lib, "middleware " * 500)
@@ -153,3 +153,48 @@ def test_note_added_after_change_is_fresh(conn, lib, docs_dir):
 def test_stale_notes_skips_notes_without_revision(conn, lib):
     add_note(conn, lib, "Legacy note.", source_rev="")
     assert stale_notes(conn, lib) == []
+
+
+def test_stale_details_match_the_reason(conn, lib, docs_dir):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import index_library
+    from virtudoc.notes import note_payload, note_statuses
+
+    add_note(conn, lib, "Use the retry helper.", paths=["api.md"])
+    (docs_dir / "api.md").write_text("# API\n\n## Retry\n\nMoved.\n")
+    index_library(conn, lib, Chunker())
+
+    note = note_statuses(conn, lib)[0]
+    payload = note_payload(note)
+    assert note.stale_details == ["api.md"]
+    assert payload["stale_details"] == ["api.md"]
+    assert payload["changed_sources"] == ["api.md"]
+
+
+def test_remove_note_deletes_symbols_without_foreign_keys(conn, lib, docs_dir):
+    from virtudoc.notes import note_symbols
+
+    (docs_dir / "api.md").write_text("# API\n\nvalidateSession() here.\n")
+    index_library(conn, lib, Chunker())
+    note_id = add_note(conn, lib, "Use validateSession here.")
+    assert note_symbols(conn, note_id)
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    assert remove_note(conn, lib, note_id) is True
+    assert conn.execute("SELECT COUNT(*) FROM note_symbols").fetchone()[0] == 0
+
+
+def test_library_removal_deletes_symbols(conn, lib, docs_dir):
+    from virtudoc.indexer.indexer import delete_library
+
+    (docs_dir / "api.md").write_text("# API\n\nvalidateSession() here.\n")
+    index_library(conn, lib, Chunker())
+    add_note(conn, lib, "Use validateSession here.")
+    delete_library(conn, "demo")
+    assert conn.execute("SELECT COUNT(*) FROM note_symbols").fetchone()[0] == 0
+
+
+def test_relevant_notes_preserve_text_byte_for_byte(conn, lib):
+    text = "middleware rule:\n  two  spaces\tand `validateSession`."
+    add_note(conn, lib, text, no_anchor=True)
+    assert [note.text for note in relevant_notes(conn, lib, "middleware")] == [text]

@@ -152,13 +152,15 @@ default environment, so the data directory is `~/.virtudoc` — set
   `"Guide → Authentication"` or a top-level branch name (`"Guide"`) — a
   bare leaf name alone does not match. Project notes are included before
   the fragments: each note carries `status` (`current`/`stale`/`unknown`),
-  `stale_reason`, `changed_sources` and `reviewed_at`, and a
+  `stale_reason`, `stale_details` and `reviewed_at`, and a
   `notes_warning` appears when any note relies on changed documentation.
   Identifiers from the query that the docs never mention are listed in
   `missing_identifiers`; notes mentioning them carry `mentions_missing`,
   and a note whose symbol anchor disappeared is stale with `symbol_removed`.
-  `coverage` reports `full`, `partial` or `none` for how much of the query
-  the returned fragments answer.
+  `coverage` reports `matched`, `partial` or `none`: whether query
+  identifiers exist in the documentation, not whether it answers the
+  question. `unreturned_identifiers` names identifiers that exist but are
+  not on this page.
   Pinned notes are always included; notes that do not fit are counted in
   `notes_omitted` and never truncated. Empty results state that the index does
   not cover the query, tell the agent not to answer from memory, and

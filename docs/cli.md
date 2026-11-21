@@ -159,8 +159,19 @@ chunks/FTS rows). A note is stale when the indexed source changed since the
 note was written — the recorded revision no longer matches. For git
 checkout sources it also warns when the checkout is on a
 non-default branch or has uncommitted changes — the indexed docs then
-depend on someone's work in progress. Prints a report and exits with code
-`1` when problems are found — usable in CI.
+depend on someone's work in progress.
+
+Findings have two levels. Errors (missing sources or manifests, broken index,
+unstable checkout) exit with code `1`, so the command stays usable in CI.
+Warnings — stale notes and oversized notes — do not change the exit code by
+default: a stale note is normal between releases. Pass `--strict` to make any
+stale note fail the run:
+
+```bash
+virtudoc doctor --strict
+```
+
+A real error still exits with `1` both with and without `--strict`.
 
 ## mcp-config — ready MCP client snippet
 

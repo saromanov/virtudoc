@@ -652,9 +652,11 @@ def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
     for line in result.lines:
         print(line)
     strict = bool(getattr(args, "strict", False))
-    if strict and any("is stale" in line for line in result.lines):
+    if result.problems:
         return 1
-    return 1 if result.problems else 0
+    if strict and result.note_warnings:
+        return 1
+    return 0
 
 
 def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:

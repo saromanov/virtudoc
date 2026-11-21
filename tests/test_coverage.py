@@ -4,6 +4,7 @@ import pytest
 
 from virtudoc.coverage import (
     IdentifierChecker,
+    extract_identifier_specs,
     extract_identifiers,
     library_has_identifier,
     missing_identifiers,
@@ -50,8 +51,8 @@ def test_library_has_identifier(conn, lib):
 def test_checker_checks_each_identifier_once(conn, lib):
     checker = IdentifierChecker(conn, lib)
     assert checker.missing(["validateSession", "validateSession", "nope"]) == ["nope"]
-    assert checker.cache["validateSession"] is True
-    assert checker.cache["nope"] is False
+    assert checker.cache[("validateSession", True)] is True
+    assert checker.cache[("nope", True)] is False
 
 
 def test_missing_identifiers_deduplicates(conn, lib):
@@ -120,5 +121,98 @@ def test_prefetch_handles_more_than_one_batch(conn, lib):
     checker = IdentifierChecker(conn, lib)
     identifiers = [f"missing{index}Symbol" for index in range(600)] + ["validateSession"]
     checker.prefetch(identifiers)
-    assert checker.cache["validateSession"] is True
-    assert checker.cache["missing599Symbol"] is False
+    assert checker.cache[("validateSession", True)] is True
+    assert checker.cache[("missing599Symbol", True)] is False
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Call `retry` first.", ["retry"]),
+        ("Use issueLegacyToken now.", ["issueLegacyToken"]),
+        ("Both HttpClient and HTTPClient work.", ["HttpClient", "HTTPClient"]),
+        ("Set issue_legacy_token in config.", ["issue_legacy_token"]),
+        ("Call client.send before the request.", ["client.send"]),
+        ("Invoke connect() and read(x).", ["connect", "read"]),
+    ],
+)
+def test_extract_identifiers_rule_table(text, expected):
+    assert extract_identifiers(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Version 2.1.0 and v3.2 are numbers.", []),
+        ("See https://example.com/api for details.", []),
+        ("The path docs/guide.md holds it.", []),
+        ("HTTP and API are prose acronyms.", []),
+        ("id is too short.", []),
+        ("`HTTP` in backticks is code.", ["HTTP"]),
+    ],
+)
+def test_extract_identifiers_exclusions(text, expected):
+    assert extract_identifiers(text) == expected
+
+
+def test_extract_identifiers_code_span_is_case_insensitive():
+    specs = extract_identifier_specs("Use `Session` and issueLegacyToken.")
+    assert [(spec.name, spec.case_sensitive) for spec in specs] == [
+        ("Session", False),
+        ("issueLegacyToken", True),
+    ]
+
+
+def test_assess_reports_missing_and_levels(conn, lib):
+    from virtudoc.coverage import assess
+
+    none = assess(conn, lib, "issueMissingToken", [], total_matches=0)
+    assert none.level == "none"
+    assert none.missing == ["issueMissingToken"]
+
+    partial = assess(conn, lib, "issueMissingToken create token legacy flow", [], total_matches=2)
+    assert partial.level == "partial"
+    assert partial.missing == ["issueMissingToken"]
+
+    matched = assess(conn, lib, "validateSession", [], total_matches=1)
+    assert matched.level == "matched"
+    assert matched.missing == []
+    assert matched.unreturned == ["validateSession"]
+
+
+def test_assess_query_without_identifiers_is_matched(conn, lib):
+    from virtudoc.coverage import assess
+
+    coverage = assess(conn, lib, "how do we create a token", [], total_matches=1)
+    assert coverage.level == "matched"
+    assert coverage.missing == []
+    assert coverage.unreturned == []
+
+
+def test_assess_flags_identifier_on_another_page(conn, lib):
+    from virtudoc.coverage import assess
+
+    coverage = assess(conn, lib, "validateSession auth", ["Auth middleware text."], total_matches=4)
+    assert coverage.level == "matched"
+    assert coverage.unreturned == ["validateSession"]
+
+
+def test_qualified_identifier_needs_word_boundary(conn, docs_dir):
+    (docs_dir / "api.md").write_text("# API\n\nclient.sender is the target.\n")
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+
+    assert library_has_identifier(conn, lib_id, "client.sender") is True
+    assert library_has_identifier(conn, lib_id, "client.send") is False
+
+
+def test_query_lowercase_of_pascal_symbol_is_not_an_identifier(conn, docs_dir):
+    from virtudoc.coverage import assess
+
+    (docs_dir / "api.md").write_text("# API\n\nHttpClient sends requests.\n")
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+
+    coverage = assess(conn, lib_id, "httpclient", [], total_matches=1)
+    assert coverage.level == "matched"
+    assert coverage.missing == []

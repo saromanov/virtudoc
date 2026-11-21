@@ -34,10 +34,15 @@ def home_index(home, docs_dir):
 
 
 def _server_params(home) -> StdioServerParameters:
+    # Minimal environment: a test must not borrow the developer's variables
+    # (VIRTUDOC_HTTP_TOKEN, VIRTUDOC_HOME of another checkout, and so on).
+    env = {"VIRTUDOC_HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    if os.environ.get("SYSTEMROOT"):
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "virtudoc", "serve"],
-        env={**os.environ, "VIRTUDOC_HOME": str(home)},
+        env=env,
         cwd=str(REPO_ROOT),
     )
 
@@ -450,6 +455,10 @@ async def test_index_forgets_renamed_symbols_and_marks_query_uncovered(home, tmp
     The agent keeps one MCP session while the human edits the docs and runs
     the CLI. An old symbol left in the index would look like a valid answer,
     so the same session must see no fragments for it afterwards.
+
+    This test checks the index and the server response. It does not check how
+    a model behaves after the docs change; that is the job of
+    `evals/stale_symbols` (§5).
     """
     docs = tmp_path / "authdocs"
     docs.mkdir()
@@ -953,6 +962,10 @@ def _apply_docs_change(docs: Path, change: str) -> Path | None:
     if change == "delete_file":
         api.unlink()
         return None
+    if change == "rename_file":
+        renamed = docs / "api.md.bak"
+        api.rename(renamed)
+        return renamed
     # Renames are not tracked: moving the file to a path the walker ignores
     # makes the index see a deletion of the old document.
     renamed = docs / "api.md.bak"
@@ -1004,7 +1017,7 @@ async def test_changed_docs_leave_no_stale_symbol(home, tmp_path, refresh, chang
     server = build_server(Config())
 
     old = await _inprocess_docs(server, "local/demo", "legacyCreateToken")
-    assert old["coverage"] in ("none", "partial")
+    assert old["coverage"] == "none"
     assert "legacyCreateToken" in old["missing_identifiers"]
     assert old["notes"][0]["status"] == "stale"
     assert old["notes"][0]["stale_reason"] == "symbol_removed"
@@ -1016,3 +1029,107 @@ async def test_changed_docs_leave_no_stale_symbol(home, tmp_path, refresh, chang
 
     neighbor = await _inprocess_docs(server, "local/demo", "neighborToken")
     assert neighbor["snippets"]
+
+    if change == "rename_file":
+        with open_db(Config().db_path) as conn:
+            assert (
+                conn.execute("SELECT COUNT(*) FROM documents WHERE rel_path = 'api.md'").fetchone()[
+                    0
+                ]
+                == 0
+            )
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE library_id = 'local/demo' "
+                    "AND text LIKE '%legacyCreateToken%'"
+                ).fetchone()[0]
+                == 0
+            )
+
+
+@pytest.mark.anyio
+async def test_response_always_reports_coverage_fields(home_index):
+    from virtudoc.mcp_server import build_server
+
+    server = build_server(Config())
+    matched = await _inprocess_docs(server, "local/demo", "middleware конвейер")
+    assert matched["coverage"] == "matched"
+    assert matched["missing_identifiers"] == []
+    assert matched["unreturned_identifiers"] == []
+
+    uncovered = await _inprocess_docs(server, "local/demo", "issueMissingToken")
+    assert uncovered["coverage"] == "none"
+    assert uncovered["missing_identifiers"] == ["issueMissingToken"]
+    assert uncovered["unreturned_identifiers"] == []
+
+    keys = list(uncovered)
+    assert keys.index("coverage") < keys.index("missing_identifiers")
+    assert keys.index("missing_identifiers") < keys.index("unreturned_identifiers")
+    assert keys.index("unreturned_identifiers") < keys.index("message")
+    assert keys.index("message") < keys.index("notes")
+    assert keys.index("notes") < keys.index("snippets")
+    assert keys.index("snippets") < keys.index("total_tokens")
+
+
+@pytest.mark.anyio
+async def test_partial_coverage_message_names_missing_identifiers(home, tmp_path):
+    from virtudoc.mcp_server import build_server
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "flow.md").write_text(
+        "# Flow\n\n## Tokens\n\ncreate token legacy flow with the modern helper.\n"
+    )
+    _run_cli(home, "add", str(docs), "--name", "flow")
+
+    payload = await _inprocess_docs(
+        build_server(Config()), "local/flow", "issueLegacyToken create token legacy flow"
+    )
+    assert payload["coverage"] == "partial"
+    assert payload["missing_identifiers"] == ["issueLegacyToken"]
+    assert payload["snippets"]
+    assert "issueLegacyToken" in payload["message"]
+    assert "Do not use them from memory" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_outline_reports_coverage_and_empty_unreturned(home_index):
+    from virtudoc.mcp_server import build_server
+
+    payload = await build_server(Config()).call_tool(
+        "get-library-docs",
+        {
+            "libraryId": "local/demo",
+            "query": "middleware",
+            "mode": "outline",
+        },
+    )
+    data = json.loads(payload.content[0].text)
+    assert data["coverage"] == "matched"
+    assert data["missing_identifiers"] == []
+    assert data["unreturned_identifiers"] == []
+
+
+@pytest.mark.anyio
+async def test_note_text_is_byte_for_byte_in_mcp_response(home_index):
+    from virtudoc.notes import add_note
+
+    text = "Middleware rule:\n  keep  two spaces\tand `validateSession`."
+    with open_db(Config().db_path) as conn:
+        library = conn.execute("SELECT id FROM libraries").fetchone()
+        add_note(conn, library["id"], text, no_anchor=True)
+
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": library["id"], "query": "middleware rule"},
+            )
+    payload = _payload(result)
+    assert payload["notes"][0]["text"] == text
+
+
+def test_server_params_do_not_inherit_http_token(home, monkeypatch):
+    monkeypatch.setenv("VIRTUDOC_HTTP_TOKEN", "secret-from-developer-shell")
+    assert "VIRTUDOC_HTTP_TOKEN" not in _server_params(home).env

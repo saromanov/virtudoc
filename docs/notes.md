@@ -82,8 +82,20 @@ unrelated page does not.
 
 When `get-library-docs` (or `virtudoc search --name`) runs, pinned notes come
 first, then the notes whose words match the query. Every note carries
-`status`, `stale_reason`, `changed_sources` and `reviewed_at` in the same
-response. If a query mentions an identifier the docs never had, the payload adds
+`status`, `stale_reason`, `stale_details` and `reviewed_at` in the same
+response. `stale_details` holds up to five items, chosen by the reason:
+
+| `stale_reason` | `stale_details` |
+|---|---|
+| `symbol_removed` | removed symbol names |
+| `anchor_deleted` / `anchor_changed` | changed `rel_path` values |
+| `version_differs` | `origin_library_id` |
+| `library_changed` | `[]` |
+
+`changed_sources` is kept for one release as a deprecated alias of
+`stale_details`; it will be removed in v0.4.0.
+
+If a query mentions an identifier the docs never had, the payload adds
 `missing_identifiers`, and notes that mention such an identifier carry
 `mentions_missing` — the agent then knows the name came from a note, not
 from the documentation. If any note is stale, the payload adds

@@ -20,13 +20,20 @@ GIT_TIMEOUT = 10
 @dataclass
 class CheckResult:
     problems: int = 0
+    note_warnings: int = 0
     lines: list[str] = field(default_factory=list)
 
     def ok(self, line: str) -> None:
         self.lines.append(f"  ok   {line}")
 
     def warn(self, line: str) -> None:
+        """A real error: changes the exit code even without --strict."""
         self.problems += 1
+        self.lines.append(f"  WARN {line}")
+
+    def warning(self, line: str) -> None:
+        """A finding that only --strict turns into a non-zero exit code."""
+        self.note_warnings += 1
         self.lines.append(f"  WARN {line}")
 
     def info(self, line: str) -> None:
@@ -133,7 +140,7 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
             for note in stale:
                 detail = ", ".join(note.missing_symbols or note.changed_sources[:5])
                 suffix = f": {detail}" if detail else ""
-                result.warn(
+                result.warning(
                     f"{lib['name']}: note #{note.id} is stale "
                     f"({note.stale_reason or 'unknown'}{suffix})"
                 )
@@ -195,6 +202,8 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
 
     if result.problems:
         result.info(f"{result.problems} problem(s) found")
+    elif result.note_warnings:
+        result.info(f"{result.note_warnings} warning(s) found (use --strict to fail)")
     else:
         result.info("no problems found")
     return result

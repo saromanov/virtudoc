@@ -287,7 +287,8 @@ def test_doctor_warns_on_stale_note(conn, docs_dir, tmp_path):
     assert "stale" in line
     assert "anchor_changed" in line
     assert "api.md" in line
-    assert result.problems == 1
+    assert result.problems == 0
+    assert result.note_warnings == 1
 
 
 def test_doctor_accepts_fresh_note(conn, docs_dir, tmp_path):
@@ -343,3 +344,39 @@ def test_doctor_reports_removed_symbol_with_commands(conn, docs_dir, tmp_path):
     assert "symbol_removed: validateSession" in line
     assert any("edit:" in item for item in result.lines)
     assert any("reanchor:" in item for item in result.lines)
+
+
+def _stale_note_home(home):
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.notes import add_note
+
+    docs = home.parent / "doctor-docs"
+    docs.mkdir()
+    (docs / "api.md").write_text("# API\n\n## Retry\n\nRetry lives here.\n")
+    with open_db(Config().db_path) as conn:
+        lib_id = add_library(conn, docs, "demo")
+        index_library(conn, lib_id, Chunker())
+        add_note(conn, lib_id, "Use the retry helper.", paths=["api.md"])
+        (docs / "api.md").write_text("# API\n\n## Retry\n\nMoved to core.\n")
+        index_library(conn, lib_id, Chunker())
+
+
+def test_doctor_exit_code_ignores_stale_notes_without_strict(home, capsys):
+    _stale_note_home(home)
+    assert main(["doctor"]) == 0
+    assert "is stale" in capsys.readouterr().out
+    assert main(["doctor", "--strict"]) == 1
+
+
+def test_doctor_strict_does_not_hide_real_errors(home, tmp_path, capsys):
+    docs = tmp_path / "gone"
+    docs.mkdir()
+    (docs / "index.md").write_text("# Docs\n", encoding="utf-8")
+    assert main(["add", str(docs), "--name", "gone"]) == 0
+    shutil.rmtree(docs)
+    assert main(["doctor"]) == 1
+    assert main(["doctor", "--strict"]) == 1
+    assert "source directory missing" in capsys.readouterr().out

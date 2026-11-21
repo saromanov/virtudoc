@@ -432,3 +432,54 @@ def test_migrates_v5_db_to_note_anchors(tmp_path):
     ).fetchone()
     assert fingerprint_row[0] == fingerprint
     conn.close()
+
+
+def test_migrates_v5_symbol_that_is_gone_reports_stale(tmp_path):
+    import hashlib
+    import sqlite3
+
+    from virtudoc.notes import note_statuses
+
+    fingerprint = hashlib.sha256(b"api.md\x00hash-1\x00").hexdigest()[:12]
+    path = tmp_path / "v5-symbol.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(
+        f"""
+        CREATE TABLE libraries (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, source_path TEXT NOT NULL,
+            description TEXT, version TEXT, channel TEXT NOT NULL DEFAULT 'release',
+            added_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY, library_id TEXT NOT NULL, rel_path TEXT NOT NULL,
+            title TEXT, content_hash TEXT NOT NULL, indexed_at TEXT NOT NULL,
+            UNIQUE (library_id, rel_path)
+        );
+        CREATE TABLE chunks (
+            id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL,
+            library_id TEXT NOT NULL, heading_path TEXT NOT NULL DEFAULT '',
+            ord INTEGER NOT NULL, text TEXT NOT NULL,
+            token_est INTEGER NOT NULL, code_ratio REAL NOT NULL DEFAULT 0
+        );
+        CREATE TABLE notes (
+            id INTEGER PRIMARY KEY, library_id TEXT NOT NULL, text TEXT NOT NULL,
+            created_at TEXT NOT NULL, source_rev TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO libraries VALUES
+            ('local/demo', 'demo', '/tmp/docs', NULL, NULL, 'release', 'now', 'now');
+        INSERT INTO documents VALUES (1, 'local/demo', 'api.md', 'API', 'hash-1', 'now');
+        INSERT INTO chunks VALUES
+            (1, 1, 'local/demo', 'Session', 0, 'session management lives here.', 1, 0);
+        INSERT INTO notes (library_id, text, created_at, source_rev) VALUES
+            ('local/demo', 'Call Session.open before serving.', 'now', '{fingerprint}');
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = open_db(path)
+    note = note_statuses(conn, "local/demo")[0]
+    assert note.status == "stale"
+    assert note.stale_reason == "symbol_removed"
+    assert note.symbols == ["Session.open"]
+    conn.close()

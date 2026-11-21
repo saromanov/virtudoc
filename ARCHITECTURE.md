@@ -22,6 +22,9 @@ virtudoc/
 ├── cli.py            # CLI: add, update, list, remove, search, serve (M2)
 ├── config.py         # TOML config ~/.virtudoc/config.toml + defaults
 ├── db.py             # SQLite connection (WAL), schema, chunk insert/delete
+├── coverage.py       # identifier extraction, case rules, query coverage
+├── notes.py          # note selection, anchors, staleness, payload fields
+├── payload.py        # get-library-docs response assembly (stable key order)
 ├── tokens.py         # Empirical token estimate (chars/4 latin, /3 cyrillic)
 ├── indexer/
 │   ├── walker.py     # Source traversal: hidden dirs, extension filter, 5 MB limit
@@ -84,6 +87,25 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
 4. Output is assembled under a token budget (default 5000) and a result
    limit (20); exceeding the budget is not an error — output is cut at a
    chunk boundary with a 10% margin.
+
+### Serving path: `get-library-docs`
+
+```
+refresh_if_stale
+      ↓
+search / library_outline
+      ↓
+coverage: extract identifiers → check the index → level/missing/unreturned
+      ↓
+notes: statuses, anchors, relevance, budget, mentions_missing
+      ↓
+payload: one key order for fragments, empty results and outline
+```
+
+`coverage.assess` owns the level rules; `notes.build_notes_payload` owns
+note selection and warning text; `payload.doc_payload` only renders. The
+transport module describes tools, parameters and errors, so the same
+contract is used by every branch (fragments, empty result, outline).
 
 ### Version-aware ranking
 

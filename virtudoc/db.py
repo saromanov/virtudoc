@@ -7,6 +7,10 @@ from pathlib import Path
 
 SCHEMA_VERSION = 6
 
+# Bumped when the shape of `library_symbols` changes, so an existing database
+# is re-tokenized once after an upgrade.
+SYMBOLS_VERSION = "2"
+
 # RETURNING needs 3.35, the trigram tokenizer needs 3.34.
 MIN_SQLITE_VERSION = (3, 35, 0)
 
@@ -77,6 +81,16 @@ def connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _symbols_current(conn: sqlite3.Connection) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'library_symbols_version'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None and row[0] == SYMBOLS_VERSION
+
+
 def _schema_ready(conn: sqlite3.Connection) -> bool:
     if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
         return False
@@ -97,7 +111,12 @@ def _schema_ready(conn: sqlite3.Connection) -> bool:
         "project_links",
         "meta",
     }
-    return required <= names
+    if not required <= names:
+        return False
+    note_symbol_columns = {row[1] for row in conn.execute("PRAGMA table_info(note_symbols)")}
+    if "case_sensitive" not in note_symbol_columns:
+        return False
+    return _symbols_current(conn)
 
 
 def _backfill_fts(conn: sqlite3.Connection, table: str) -> None:
@@ -115,9 +134,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
         return
     fts_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'").fetchone()
     tri_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_tri'").fetchone()
-    symbols_existed = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE name = 'library_symbols'"
-    ).fetchone()
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS libraries (
@@ -187,6 +203,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS note_symbols (
             note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
             symbol TEXT NOT NULL,
+            case_sensitive INTEGER NOT NULL DEFAULT 1,
             anchored_at TEXT NOT NULL,
             PRIMARY KEY (note_id, symbol)
         );
@@ -241,6 +258,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
         # Notes written before v4 have no recorded revision; staleness is
         # unknown for them, so doctor leaves them alone.
         conn.execute("ALTER TABLE notes ADD COLUMN source_rev TEXT NOT NULL DEFAULT ''")
+    symbol_columns = {row[1] for row in conn.execute("PRAGMA table_info(note_symbols)")}
+    if symbol_columns and "case_sensitive" not in symbol_columns:
+        # Pre-v0.3 notes tracked only the name. Treat their anchors as
+        # case-sensitive: a note that used a code span is re-anchored on the
+        # next review, and a false "stale" is safer than a false "current".
+        conn.execute(
+            "ALTER TABLE note_symbols ADD COLUMN case_sensitive INTEGER NOT NULL DEFAULT 1"
+        )
     needs_note_scope = bool(note_columns) and "library_name" not in note_columns
     if needs_note_scope:
         # Notes written before v6 belong to the variant they were attached to.
@@ -264,7 +289,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         ).fetchall():
             rebuild_library_symbols(conn, library["id"])
         backfill_note_scope(conn)
-    elif not symbols_existed:
+    if not _symbols_current(conn):
+        # First run after an upgrade: the table predates dotted prefixes and
+        # exact-case entries. Re-tokenize once, then record the shape.
         from .coverage import rebuild_library_symbols
 
         for library in conn.execute(
@@ -272,6 +299,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
             "(SELECT 1 FROM documents d WHERE d.library_id = libraries.id)"
         ).fetchall():
             rebuild_library_symbols(conn, library["id"])
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('library_symbols_version', ?)",
+            (SYMBOLS_VERSION,),
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_name ON notes(library_name)")
     if not fts_existed:
         # the FTS table was just recreated — restore pre-v3 rows

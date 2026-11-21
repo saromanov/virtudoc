@@ -1,17 +1,22 @@
 """Identifier coverage: which identifiers a library's docs actually mention.
 
-The rules are deliberately conservative. A prose word must never become an
-identifier, otherwise every note would report a false "symbol removed".
+Extraction follows the documented rules (docs/mcp.md, FR-1):
 
-R1. A candidate starts with a letter or underscore and continues with
-    letters, digits and underscores; dotted paths are kept whole.
-R2. A candidate is an identifier only when it looks like code: it is
-    followed by `(`, contains `_` or `.`, has an inner/leading capital
-    (camelCase, PascalCase), or is an all-caps constant of two characters.
-R3. A trailing call `()` is stripped: `retry()` and `retry` are one symbol.
-R4. Language keywords and common prose acronyms are dropped.
-R5. Duplicates are removed, the first occurrence wins.
-R6. At most `limit` identifiers are returned (None = no limit).
+R1. Anything inside backticks or a fenced code block is code; it is matched
+    case-insensitively.
+R2. camelCase (a lowercase letter before an uppercase one) — case-sensitive.
+R3. PascalCase with at least two uppercase letters, not all caps — sensitive.
+R4. snake_case: `_` between letters or digits — case-sensitive.
+R5. Dotted member access, both parts start with a letter — case-sensitive.
+R6. A call suffix `()` or `(…)` is stripped; the name is case-sensitive.
+
+Numbers, versions, URLs, paths, short tokens and all-caps prose acronyms are
+not identifiers. Duplicates are removed, the first occurrence wins, and the
+caller may cap the result count.
+
+The `library_symbols` table is a prefilter, not the source of truth: it is
+looked up by exact key (respecting the case policy) and the result is still a
+whole-token match because the table is built from the tokenizer.
 """
 
 from __future__ import annotations
@@ -20,16 +25,14 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from .db import fts_normalize
-from .search.engine import _TOKEN_RE, MIN_TOPIC_PREFIX, _stem, tokenize
-
 _CANDIDATE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _CODE_SPAN_RE = re.compile(r"`+([^`]+)`+")
 _FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_VERSION_RE = re.compile(r"v?\d+(?:\.\d+)+", re.IGNORECASE)
+_CAMEL_RE = re.compile(r"[a-z][A-Z]")
 
-_KEYWORDS = frozenset(
+_LANGUAGE_KEYWORDS = frozenset(
     {
-        # Python / JavaScript / Go keywords
         "and",
         "as",
         "assert",
@@ -93,7 +96,11 @@ _KEYWORDS = frozenset(
         "while",
         "with",
         "yield",
-        # Prose words that can be capitalised
+    }
+)
+
+_PROSE_WORDS = frozenset(
+    {
         "the",
         "a",
         "an",
@@ -111,7 +118,6 @@ _KEYWORDS = frozenset(
         "team",
         "doc",
         "docs",
-        # Common acronyms that are not API symbols
         "api",
         "http",
         "https",
@@ -130,6 +136,20 @@ _KEYWORDS = frozenset(
     }
 )
 
+_PRESENCE_TEMPLATE = r"(?<![\w.]){}(?![\w])"
+
+
+@dataclass(frozen=True)
+class Identifier:
+    """One extracted identifier and the case policy of its rule."""
+
+    name: str
+    case_sensitive: bool = True
+
+    @property
+    def cache_key(self) -> tuple[str, bool]:
+        return self.name, self.case_sensitive
+
 
 @dataclass
 class IdentifierChecker:
@@ -137,28 +157,48 @@ class IdentifierChecker:
 
     conn: sqlite3.Connection
     library_id: str
-    cache: dict[str, bool] = field(default_factory=dict)
+    cache: dict[tuple[str, bool], bool] = field(default_factory=dict)
 
-    def has(self, identifier: str) -> bool:
-        cached = self.cache.get(identifier)
+    def has(self, identifier: str | Identifier, *, case_sensitive: bool | None = None) -> bool:
+        if isinstance(identifier, Identifier):
+            spec = identifier
+        else:
+            spec = Identifier(
+                identifier,
+                True if case_sensitive is None else case_sensitive,
+            )
+        cached = self.cache.get(spec.cache_key)
         if cached is not None:
             return cached
-        found = library_has_identifier(self.conn, self.library_id, identifier)
-        self.cache[identifier] = found
+        found = library_has_identifier(
+            self.conn,
+            self.library_id,
+            spec.name,
+            case_sensitive=spec.case_sensitive,
+        )
+        self.cache[spec.cache_key] = found
         return found
 
-    def missing(self, identifiers: list[str]) -> list[str]:
-        return [identifier for identifier in identifiers if not self.has(identifier)]
+    def missing(self, identifiers: list[str | Identifier]) -> list[str]:
+        missing: list[str] = []
+        for identifier in identifiers:
+            if not self.has(identifier):
+                name = identifier.name if isinstance(identifier, Identifier) else identifier
+                missing.append(name)
+        return missing
 
-    def prefetch(self, identifiers: list[str]) -> None:
+    def prefetch(self, identifiers: list[str | Identifier]) -> None:
         """Resolve many identifiers at once from the symbols table.
 
         One indexed query per 500 identifiers; databases indexed before the
         table existed fall back to per-identifier checks.
         """
-        pending = [
-            identifier for identifier in dict.fromkeys(identifiers) if identifier not in self.cache
-        ]
+        specs = [item if isinstance(item, Identifier) else Identifier(item) for item in identifiers]
+        pending: list[Identifier] = []
+        for spec in specs:
+            if spec.cache_key in self.cache or spec in pending:
+                continue
+            pending.append(spec)
         if not pending:
             return
         built = self.conn.execute(
@@ -166,12 +206,12 @@ class IdentifierChecker:
             (self.library_id,),
         ).fetchone()
         if built is None:
-            for identifier in pending:
-                self.has(identifier)
+            for spec in pending:
+                self.has(spec)
             return
         for start in range(0, len(pending), 500):
             batch = pending[start : start + 500]
-            keys = [identifier if "." in identifier else identifier.lower() for identifier in batch]
+            keys = [spec.name if spec.case_sensitive else spec.name.lower() for spec in batch]
             placeholders = ",".join("?" for _ in keys)
             rows = self.conn.execute(
                 f"SELECT symbol FROM library_symbols "
@@ -179,23 +219,8 @@ class IdentifierChecker:
                 (self.library_id, *keys),
             ).fetchall()
             present = {row["symbol"] for row in rows}
-            for identifier, key in zip(batch, keys, strict=True):
-                self.cache[identifier] = key in present
-
-
-def _looks_like_identifier(candidate: str, *, called: bool) -> bool:
-    lowered = candidate.lower()
-    if lowered in _KEYWORDS or lowered.replace(".", "").replace("_", "") in _KEYWORDS:
-        return False
-    if called:
-        return True
-    if "_" in candidate or "." in candidate:
-        return len(candidate) >= 3
-    if candidate.isupper() and len(candidate) >= 2:
-        return True
-    if len(candidate) >= 4 and any(ch.isupper() for ch in candidate[1:]):
-        return True
-    return False
+            for spec, key in zip(batch, keys, strict=True):
+                self.cache[spec.cache_key] = key in present
 
 
 def _code_ranges(text: str) -> list[tuple[int, int]]:
@@ -204,47 +229,94 @@ def _code_ranges(text: str) -> list[tuple[int, int]]:
     return ranges
 
 
-def extract_identifiers(text: str, *, limit: int | None = None) -> list[str]:
-    """Identifiers mentioned in a note or a query, in order of appearance.
+def _in_url_or_path(text: str, start: int, end: int) -> bool:
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    if (before and before in "/\\") or (after and after in "/\\"):
+        return True
+    return text.startswith("://", end)
 
-    Text inside backticks and fenced code blocks is trusted as code, so a
-    single capitalised word such as `Session` is kept there (R1).
-    """
+
+def _extract_specs(text: str, *, limit: int | None = None) -> list[Identifier]:
     code_ranges = _code_ranges(text)
     seen: set[str] = set()
-    found: list[str] = []
+    found: list[Identifier] = []
     for match in _CANDIDATE_RE.finditer(text):
-        candidate = match.group(0)
+        candidate = match.group(0).rstrip(".")
+        lowered = candidate.lower()
         in_code = any(start <= match.start() < end for start, end in code_ranges)
-        tail = text[match.end() : match.end() + 2]
+        tail = text[match.end() : match.end() + 3]
         called = tail.startswith("(")
-        if in_code:
-            if candidate.lower() in _KEYWORDS:
+
+        if len(candidate) < 3 or _VERSION_RE.fullmatch(candidate):
+            continue
+        if not in_code:
+            if lowered in _LANGUAGE_KEYWORDS or lowered in _PROSE_WORDS:
                 continue
-        elif not _looks_like_identifier(candidate, called=called):
+            if candidate.isupper():
+                # A prose acronym, unless it is written as code.
+                continue
+            if _in_url_or_path(text, match.start(), match.end()):
+                continue
+        elif lowered in _LANGUAGE_KEYWORDS and not candidate.isupper():
             continue
-        symbol = candidate.rstrip(".")
-        if symbol in seen:
+
+        if called:
+            case_sensitive = True
+        elif "." in candidate:
+            case_sensitive = True
+        elif "_" in candidate:
+            case_sensitive = True
+        elif _CAMEL_RE.search(candidate):
+            case_sensitive = True
+        elif candidate[0].isupper() and sum(ch.isupper() for ch in candidate) >= 2:
+            case_sensitive = not candidate.isupper()
+        elif in_code:
+            case_sensitive = False
+        else:
             continue
-        seen.add(symbol)
-        found.append(symbol)
+
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        found.append(Identifier(candidate, case_sensitive))
         if limit is not None and len(found) >= limit:
             break
     return found
 
 
+def extract_identifier_specs(text: str, *, limit: int | None = None) -> list[Identifier]:
+    """Identifiers with their case policy, in order of first appearance."""
+    return _extract_specs(text, limit=limit)
+
+
+def extract_identifiers(text: str, *, limit: int | None = None) -> list[str]:
+    """Identifiers mentioned in a note or a query, in order of appearance."""
+    return [spec.name for spec in _extract_specs(text, limit=limit)]
+
+
 def symbols_in_text(text: str) -> set[str]:
     """Every identifier-ish token of a document, for the fast lookup table.
 
-    Lower-cased forms serve case-insensitive plain identifiers; qualified
-    names are also stored exactly for the case-sensitive member check.
+    Each token is stored twice: lower-cased (case-insensitive rules) and
+    exactly (case-sensitive rules). Dotted prefixes are stored too, so a query
+    for `Session` is found in `Session.open`.
     """
     found: set[str] = set()
     for match in _CANDIDATE_RE.finditer(text):
         token = match.group(0).rstrip(".")
+        if not token:
+            continue
+        found.add(token)
         found.add(token.lower())
         if "." in token:
-            found.add(token)
+            parts = token.split(".")
+            prefix: list[str] = []
+            for part in parts[:-1]:
+                prefix.append(part)
+                joined = ".".join(prefix)
+                found.add(joined)
+                found.add(joined.lower())
     return found
 
 
@@ -261,50 +333,35 @@ def rebuild_library_symbols(conn: sqlite3.Connection, library_id: str) -> None:
         )
 
 
-def _scan_has_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
-    """Fallback for databases indexed before the symbols table existed."""
-    qualified = "." in identifier
-    if len(identifier) >= 3:
-        try:
-            sql = """
-                SELECT 1
-                FROM chunks_tri
-                JOIN chunks c ON c.id = chunks_tri.rowid
-                WHERE chunks_tri MATCH ? AND c.library_id = ?
-            """
-            params: tuple = (
-                f'"{identifier.replace(chr(34), chr(34) * 2)}"',
-                library_id,
-            )
-            if qualified:
-                sql += " AND instr(c.text, ?) > 0"
-                params += (identifier,)
-            sql += " LIMIT 1"
-            return conn.execute(sql, params).fetchone() is not None
-        except sqlite3.OperationalError:
-            pass
-    sql = "SELECT 1 FROM chunks WHERE library_id = ? AND "
-    params = (library_id,)
-    if qualified:
-        sql += "instr(text, ?) > 0"
-        params += (identifier,)
-    else:
-        sql += "text LIKE ?"
-        params += (f"%{identifier}%",)
-    sql += " LIMIT 1"
-    return conn.execute(sql, params).fetchone() is not None
+def _regex_has_identifier(
+    conn: sqlite3.Connection, library_id: str, identifier: str, *, case_sensitive: bool
+) -> bool:
+    pattern = re.compile(
+        _PRESENCE_TEMPLATE.format(re.escape(identifier)),
+        0 if case_sensitive else re.IGNORECASE,
+    )
+    for row in conn.execute("SELECT text FROM chunks WHERE library_id = ?", (library_id,)):
+        if pattern.search(row["text"]):
+            return True
+    return False
 
 
-def library_has_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
+def library_has_identifier(
+    conn: sqlite3.Connection,
+    library_id: str,
+    identifier: str,
+    *,
+    case_sensitive: bool = True,
+) -> bool:
     """True when the indexed chunks of this variant mention the identifier.
 
-    Plain identifiers match case-insensitively (R1); qualified names with a
-    dot are member references and match case-sensitively (R5). The
-    `library_symbols` table makes this a primary-key lookup.
+    The symbols table is a prefilter: the key is exact for case-sensitive
+    rules and lower-cased for R1, and the table itself is tokenized, so only
+    whole identifiers match (`client.send` never matches `client.sender`).
     """
     if not identifier:
         return False
-    key = identifier if "." in identifier else identifier.lower()
+    key = identifier if case_sensitive else identifier.lower()
     row = conn.execute(
         "SELECT 1 FROM library_symbols WHERE library_id = ? AND symbol = ?",
         (library_id, key),
@@ -316,46 +373,81 @@ def library_has_identifier(conn: sqlite3.Connection, library_id: str, identifier
     ).fetchone()
     if built is not None:
         return False
-    return _scan_has_identifier(conn, library_id, identifier)
+    return _regex_has_identifier(conn, library_id, identifier, case_sensitive=case_sensitive)
 
 
-def anchorable_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
+def anchorable_identifier(
+    conn: sqlite3.Connection, library_id: str, identifier: str | Identifier
+) -> bool:
     """Whether a note may track this identifier as an anchor.
 
     A qualified name is tracked when its root is in the docs: the member is
     compared exactly at status time, so `Session.open` gets `symbol_removed`
-    when the docs only ever had `session` (R5).
+    when the docs only ever had `session` (R5). The root lookup is
+    case-insensitive because tracking is about presence, not identity.
     """
-    if "." in identifier:
-        root = identifier.split(".", 1)[0]
-        return library_has_identifier(conn, library_id, root)
-    return library_has_identifier(conn, library_id, identifier)
+    spec = identifier if isinstance(identifier, Identifier) else Identifier(identifier)
+    name = spec.name
+    if "." in name:
+        root = name.split(".", 1)[0]
+        return library_has_identifier(conn, library_id, root, case_sensitive=False)
+    return library_has_identifier(conn, library_id, name, case_sensitive=spec.case_sensitive)
 
 
-def query_coverage(query: str, texts: list[str]) -> str:
-    """How much of the query the returned text covers: full, partial or none.
+def identifier_in_texts(identifier: str | Identifier, texts: list[str]) -> bool:
+    """Whole-word presence of an identifier in the returned fragments."""
+    spec = identifier if isinstance(identifier, Identifier) else Identifier(identifier)
+    pattern = re.compile(
+        _PRESENCE_TEMPLATE.format(re.escape(spec.name)),
+        0 if spec.case_sensitive else re.IGNORECASE,
+    )
+    return any(pattern.search(text) for text in texts)
 
-    Coverage is word-level: identifiers alone may be absent while the prose
-    part of the query is answered, which is exactly the `partial` case an
-    agent must not present as a complete answer.
+
+@dataclass
+class Coverage:
+    """How much of the query the indexed docs and the returned page cover."""
+
+    level: str
+    missing: list[str] = field(default_factory=list)
+    unreturned: list[str] = field(default_factory=list)
+
+
+def assess(
+    conn: sqlite3.Connection,
+    library_id: str,
+    query: str,
+    texts: list[str],
+    *,
+    total_matches: int,
+    outline: bool = False,
+    limit: int = 8,
+    checker: IdentifierChecker | None = None,
+) -> Coverage:
+    """Assess identifier coverage for one response (FR-1.4).
+
+    `matched` means every query identifier exists in the documentation, not
+    that the documentation fully answers the question.
     """
-    tokens = tokenize(query)
-    if not tokens:
-        return "none"
-    words = set(_TOKEN_RE.findall(fts_normalize(" ".join(texts).lower())))
-    covered = 0
-    for token in tokens:
-        stem = _stem(token)
-        if any(
-            word == token
-            or word == stem
-            or (len(stem) >= MIN_TOPIC_PREFIX and word.startswith(stem))
-            for word in words
-        ):
-            covered += 1
-    if covered == 0:
-        return "none"
-    return "full" if covered == len(tokens) else "partial"
+    specs = extract_identifier_specs(query, limit=limit)
+    checker = checker or IdentifierChecker(conn, library_id)
+    checker.prefetch(specs)
+    missing = [spec.name for spec in specs if not checker.has(spec)]
+    if outline:
+        # The outline is the whole tree: page-level "unreturned" is meaningless.
+        return Coverage("partial" if missing else "matched", missing, [])
+    unreturned = [
+        spec.name
+        for spec in specs
+        if spec.name not in missing and not identifier_in_texts(spec, texts)
+    ]
+    if not texts and total_matches == 0:
+        level = "none"
+    elif missing:
+        level = "partial"
+    else:
+        level = "matched"
+    return Coverage(level, missing, unreturned)
 
 
 def missing_identifiers(

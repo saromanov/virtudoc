@@ -171,8 +171,10 @@ Fragments mode returns:
   "library_id": "local/mylib",
   "query": "authenticate request",
   "page": 1,
-  "coverage": "full",
+  "coverage": "partial",
   "missing_identifiers": ["issueLegacyToken"],
+  "unreturned_identifiers": [],
+  "message": "the indexed documentation does not mention issueLegacyToken. ...",
   "notes_warning": "1 team note(s) may be outdated: ...",
   "notes": [
     {
@@ -180,6 +182,8 @@ Fragments mode returns:
       "text": "...",
       "status": "stale",
       "stale_reason": "symbol_removed",
+      "stale_details": ["issueLegacyToken"],
+      "changed_sources": ["issueLegacyToken"],
       "missing_symbols": ["issueLegacyToken"]
     }
   ],
@@ -197,11 +201,27 @@ Fragments mode returns:
 }
 ```
 
-- `coverage` is `full`, `partial` or `none`: how much of the query the
-  returned fragments answer. `missing_identifiers` lists query identifiers
-  the docs never mention; notes mentioning them carry `mentions_missing`.
-- Team notes carry `status` (`current`/`stale`/`unknown`), `stale_reason`
-  and anchors. `notes_warning` appears when any note is stale. See
+- `coverage`, `missing_identifiers` and `unreturned_identifiers` are always
+  present, in both modes. `coverage` has three levels:
+
+  | Condition (first match) | `coverage` |
+  |---|---|
+  | no fragments on the query and `total_matches == 0` | `none` |
+  | some query identifiers are absent from the docs | `partial` |
+  | otherwise, including queries without identifiers | `matched` |
+
+  `missing_identifiers` lists query identifiers the documentation never
+  mentions; they may have been renamed or removed — do not use them from
+  memory. `unreturned_identifiers` lists identifiers that **are** in the
+  documentation but not on this page; query them directly or continue with
+  `page=2`. In outline mode `unreturned_identifiers` is always empty.
+  `matched` means every identifier exists in the documentation, not that the
+  documentation fully answers the question.
+- Notes that mention an identifier from `missing_identifiers` carry
+  `mentions_missing`.
+- Team notes carry `status` (`current`/`stale`/`unknown`), `stale_reason`,
+  `stale_details` (up to five paths, symbols or library ids, depending on the
+  reason) and anchors. `notes_warning` appears when any note is stale. See
   [Project notes](notes.md).
 
 - `total_matches` is the number of ranked matches for the query and does
@@ -223,11 +243,16 @@ Fragments mode returns:
   `get-library-docs` with that id to read the right release. If no release
   matches, `version_not_indexed` is true and the message tells the agent to
   ask the user.
-- When nothing matches, `snippets` is empty, `message` tells the agent not
-  to answer from memory, and `sections` lists the library's top-level
-  sections to help rephrase the query.
+- When nothing matches, `snippets` is empty, `coverage` is `none`, `message`
+  tells the agent not to answer from memory, and `sections` lists the
+  library's top-level sections to help rephrase the query.
 - Exceeding the budget is not an error: the page ends before the next
   fragment, and a fragment larger than the whole budget is truncated.
+- Response keys keep a stable order: `version_mismatch` → `library_id` →
+  `query` → `mode`/`page`/`section` → `coverage` → `missing_identifiers` →
+  `unreturned_identifiers` → `message` → `notes_warning` → `notes` →
+  `notes_omitted` → `snippets`/`sections` → `total_tokens` →
+  `total_matches` → `has_more`.
 
 Outline mode (`mode: "outline"`) returns the section tree with chunk counts
 and token estimates instead of fragments — the agent can plan what to load

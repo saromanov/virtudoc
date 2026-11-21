@@ -5,9 +5,11 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from .coverage import (
+    Coverage,
+    Identifier,
     IdentifierChecker,
     anchorable_identifier,
-    extract_identifiers,
+    extract_identifier_specs,
     library_has_identifier,
 )
 from .db import (
@@ -66,6 +68,7 @@ class Note:
     anchor_kind: str = ANCHOR_LIBRARY
     status: str = STATUS_UNKNOWN
     stale_reason: str | None = None
+    stale_details: list[str] = field(default_factory=list)
     changed_sources: list[str] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)
     missing_symbols: list[str] = field(default_factory=list)
@@ -86,6 +89,47 @@ class NotesSelection:
     @property
     def stale_count(self) -> int:
         return sum(1 for note in self.notes if note.status == STATUS_STALE)
+
+
+NOTES_WARNING = (
+    "{count} team note(s) may be outdated: the documentation they rely on "
+    "changed after they were written or last reviewed. If a note contradicts "
+    "the fragments or mentions identifiers from 'missing_identifiers', follow "
+    "the documentation and tell the user the note may be outdated."
+)
+
+
+@dataclass
+class NotesPayload:
+    """Notes plus everything the MCP response needs to render them."""
+
+    notes: list[Note] = field(default_factory=list)
+    omitted: int = 0
+    warning: str | None = None
+
+
+def build_notes_payload(
+    conn: sqlite3.Connection,
+    library_id: str,
+    query: str,
+    *,
+    coverage: Coverage,
+    budget: int = 800,
+    pinned_budget: int = 400,
+    checker: IdentifierChecker | None = None,
+) -> NotesPayload:
+    """Select notes and mark those that mention identifiers missing from docs."""
+    selection = select_notes(
+        conn,
+        library_id,
+        query,
+        budget_tokens=budget,
+        pinned_budget_tokens=pinned_budget,
+        checker=checker,
+    )
+    apply_mentions_missing(selection.notes, coverage.missing)
+    warning = NOTES_WARNING.format(count=selection.stale_count) if selection.stale_count else None
+    return NotesPayload(notes=selection.notes, omitted=selection.omitted, warning=warning)
 
 
 @dataclass
@@ -231,17 +275,26 @@ def _write_anchors(
 def _write_symbols(
     conn: sqlite3.Connection,
     note_id: int,
-    symbols: list[str],
+    symbols: list[str | Identifier],
     *,
     replace: bool = True,
 ) -> None:
     if replace:
         conn.execute("DELETE FROM note_symbols WHERE note_id = ?", (note_id,))
     now = utc_now()
-    for symbol in dict.fromkeys(symbols):
+    seen: set[str] = set()
+    for item in symbols:
+        spec = item if isinstance(item, Identifier) else Identifier(item)
+        if spec.name in seen:
+            continue
+        seen.add(spec.name)
         conn.execute(
-            "INSERT OR REPLACE INTO note_symbols (note_id, symbol, anchored_at) VALUES (?, ?, ?)",
-            (note_id, symbol, now),
+            """
+            INSERT OR REPLACE INTO note_symbols
+                (note_id, symbol, case_sensitive, anchored_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (note_id, spec.name, 1 if spec.case_sensitive else 0, now),
         )
 
 
@@ -279,7 +332,7 @@ def add_note(
     if no_anchor:
         anchor_kind = ANCHOR_NONE
     else:
-        identifiers = extract_identifiers(text, limit=max_symbols)
+        identifiers = extract_identifier_specs(text, limit=max_symbols)
         symbols = [
             symbol for symbol in identifiers if anchorable_identifier(conn, variant_id, symbol)
         ]
@@ -378,13 +431,18 @@ def note_anchors(
     ).fetchall()
 
 
-def note_symbols(conn: sqlite3.Connection, note_id: int) -> list[str]:
+def note_symbol_specs(conn: sqlite3.Connection, note_id: int) -> list[Identifier]:
     return [
-        row["symbol"]
+        Identifier(row["symbol"], bool(row["case_sensitive"]))
         for row in conn.execute(
-            "SELECT symbol FROM note_symbols WHERE note_id = ? ORDER BY symbol", (note_id,)
+            "SELECT symbol, case_sensitive FROM note_symbols WHERE note_id = ? ORDER BY symbol",
+            (note_id,),
         )
     ]
+
+
+def note_symbols(conn: sqlite3.Connection, note_id: int) -> list[str]:
+    return [spec.name for spec in note_symbol_specs(conn, note_id)]
 
 
 def _describe_status(
@@ -392,20 +450,22 @@ def _describe_status(
     note: Note,
     variant_id: str,
     anchors: list[dict],
-    symbols: list[str],
+    symbols: list[Identifier],
     checker: IdentifierChecker,
 ) -> None:
-    """Set status, stale_reason and changed_sources on the note in place."""
-    note.symbols = symbols
+    """Set status, stale_reason, stale_details and changed_sources in place."""
+    note.symbols = [spec.name for spec in symbols]
     if note.anchor_kind == ANCHOR_NONE:
         note.status = STATUS_UNKNOWN
         return
 
-    missing_symbols = [symbol for symbol in symbols if not checker.has(symbol)]
+    missing_symbols = [spec.name for spec in symbols if not checker.has(spec)]
     if missing_symbols:
         note.status = STATUS_STALE
         note.stale_reason = "symbol_removed"
         note.missing_symbols = missing_symbols
+        note.stale_details = missing_symbols[:5]
+        note.changed_sources = note.stale_details
         return
 
     variant_anchors = [a for a in anchors if a["library_id"] == variant_id]
@@ -423,7 +483,8 @@ def _describe_status(
         if changed:
             note.status = STATUS_STALE
             note.stale_reason = "anchor_deleted" if deleted else "anchor_changed"
-            note.changed_sources = changed[:5]
+            note.stale_details = changed[:5]
+            note.changed_sources = note.stale_details
         else:
             note.status = STATUS_CURRENT
         return
@@ -439,7 +500,8 @@ def _describe_status(
         if changed:
             note.status = STATUS_STALE
             note.stale_reason = "version_differs"
-            note.changed_sources = changed[:5]
+            note.stale_details = [note.origin_library_id][:5]
+            note.changed_sources = note.stale_details
         else:
             note.status = STATUS_CURRENT
         return
@@ -458,6 +520,7 @@ def _describe_status(
     else:
         note.status = STATUS_STALE
         note.stale_reason = "library_changed"
+        note.stale_details = []
 
 
 def note_statuses(
@@ -510,15 +573,17 @@ def note_statuses(
                 }
             )
     ordered = [notes[key] for key in sorted(notes)]
-    symbol_rows: dict[int, list[str]] = {}
+    symbol_rows: dict[int, list[Identifier]] = {}
     if ordered:
         placeholders = ",".join("?" for _ in ordered)
         for row in conn.execute(
-            f"SELECT note_id, symbol FROM note_symbols WHERE note_id IN ({placeholders}) "
-            "ORDER BY symbol",
+            f"SELECT note_id, symbol, case_sensitive FROM note_symbols "
+            f"WHERE note_id IN ({placeholders}) ORDER BY symbol",
             tuple(note.id for note in ordered),
         ):
-            symbol_rows.setdefault(row["note_id"], []).append(row["symbol"])
+            symbol_rows.setdefault(row["note_id"], []).append(
+                Identifier(row["symbol"], bool(row["case_sensitive"]))
+            )
     checker = checker or IdentifierChecker(conn, variant_id)
     checker.prefetch([symbol for symbols in symbol_rows.values() for symbol in symbols])
     for note in ordered:
@@ -677,9 +742,11 @@ def review_note(
     variant_id = variant["id"] if variant is not None else library_id
 
     missing_symbols = [
-        symbol
-        for symbol in note_symbols(conn, note_id)
-        if not library_has_identifier(conn, variant_id, symbol)
+        spec.name
+        for spec in note_symbol_specs(conn, note_id)
+        if not library_has_identifier(
+            conn, variant_id, spec.name, case_sensitive=spec.case_sensitive
+        )
     ]
     if missing_symbols and not reanchor:
         raise SymbolRemovedError(note_id, missing_symbols)
@@ -692,7 +759,7 @@ def review_note(
             k=auto_anchor_k,
             ratio=auto_anchor_ratio,
         )
-        identifiers = extract_identifiers(note.text, limit=max_symbols)
+        identifiers = extract_identifier_specs(note.text, limit=max_symbols)
         symbols = [
             symbol for symbol in identifiers if anchorable_identifier(conn, variant_id, symbol)
         ]
@@ -809,6 +876,7 @@ def note_payload(note: Note) -> dict:
         "created_at": note.created_at,
         "status": note.status,
         "stale_reason": note.stale_reason,
+        "stale_details": note.stale_details,
         "changed_sources": note.changed_sources,
         "reviewed_at": note.reviewed_or_created,
         "pinned": note.pinned,
@@ -854,7 +922,7 @@ def backfill_note_scope(conn: sqlite3.Connection) -> None:
                 selected = []
             symbols = [
                 symbol
-                for symbol in extract_identifiers(row["text"])
+                for symbol in extract_identifier_specs(row["text"])
                 if anchorable_identifier(conn, library_id, symbol)
             ]
             if selected:

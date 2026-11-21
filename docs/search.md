@@ -38,6 +38,24 @@ terminal and for agents calling `get-library-docs`.
    did not fit the previous page, so token-budget filtering never drops
    chunks between pages.
 
+## Identifier coverage
+
+Search itself is word-based; `get-library-docs` additionally checks the
+identifiers of the query against the index and reports `coverage`:
+
+- `none` — no fragments and no matches: the documentation does not cover the
+  query;
+- `partial` — fragments were found, but some identifiers are absent from the
+  documentation (`missing_identifiers`);
+- `matched` — every query identifier exists in the documentation.
+
+Identifiers are code-like tokens: backticked text, camelCase/PascalCase,
+snake_case, dotted members and calls. Prose, acronyms, versions, URLs and
+paths are not identifiers. The exact rules are in
+[MCP tools](mcp.md#get-library-docs). `unreturned_identifiers` names
+identifiers that exist in the docs but are not on the current page — continue
+with `page=2` instead of assuming they are missing.
+
 ## Score semantics
 
 `score` in a fragment is a **relevance value, not a probability and not a
