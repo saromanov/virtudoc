@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +39,17 @@ def _server_params(home) -> StdioServerParameters:
         env={**os.environ, "VIRTUDOC_HOME": str(home)},
         cwd=str(REPO_ROOT),
     )
+
+
+def _run_cli(home: Path, *args: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "virtudoc", *args],
+        env={**os.environ, "VIRTUDOC_HOME": str(home)},
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _is_error(result) -> bool:
@@ -424,6 +436,92 @@ async def test_mcp_refreshes_stale_library_on_tool_call(home, docs_dir):
     payload = _payload(after)
     assert payload["snippets"]
     assert payload["snippets"][0]["source"] == "fresh-late.md"
+
+
+@pytest.mark.anyio
+async def test_e2e_rename_and_delete_leave_no_stale_symbol_in_mcp_output(home, tmp_path):
+    """A renamed or deleted method must disappear from the served fragments.
+
+    The agent keeps one MCP session while the human edits the docs and runs
+    the CLI. An old symbol left in the index would look like a valid answer,
+    so the same session must see no fragments for it afterwards.
+    """
+    docs = tmp_path / "authdocs"
+    docs.mkdir()
+    doc = docs / "auth.md"
+    original = (
+        "# Authentication\n\n"
+        "## Token issuance\n\n"
+        "Call `issueLegacyToken` to create a token for the legacy flow.\n\n"
+        "## Session validation\n\n"
+        "Call `validateSession` before serving a request.\n"
+    )
+    renamed = original.replace("issueLegacyToken", "issueModernToken")
+    without_token_section = (
+        "# Authentication\n\n"
+        "## Session validation\n\n"
+        "Call `validateSession` before serving a request.\n"
+    )
+    doc.write_text(original, encoding="utf-8")
+    _run_cli(home, "add", str(docs), "--name", "auth")
+
+    async with stdio_client(_server_params(home)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            baseline = _payload(
+                await session.call_tool(
+                    "get-library-docs",
+                    {"libraryId": "local/auth", "query": "issueLegacyToken"},
+                )
+            )
+            assert baseline["snippets"]
+            assert "issueLegacyToken" in baseline["snippets"][0]["text"]
+
+            doc.write_text(renamed, encoding="utf-8")
+            _run_cli(home, "update", "--name", "auth")
+
+            stale = _payload(
+                await session.call_tool(
+                    "get-library-docs",
+                    {"libraryId": "local/auth", "query": "issueLegacyToken"},
+                )
+            )
+            assert stale["snippets"] == []
+            assert stale["total_matches"] == 0
+            assert "Do not answer from memory" in stale["message"]
+            assert "Authentication" in {section["section"] for section in stale["sections"]}
+
+            fresh = _payload(
+                await session.call_tool(
+                    "get-library-docs",
+                    {"libraryId": "local/auth", "query": "issueModernToken"},
+                )
+            )
+            assert fresh["snippets"]
+            assert "issueModernToken" in fresh["snippets"][0]["text"]
+
+            doc.write_text(without_token_section, encoding="utf-8")
+            _run_cli(home, "reindex", "auth")
+
+            deleted = _payload(
+                await session.call_tool(
+                    "get-library-docs",
+                    {"libraryId": "local/auth", "query": "issueModernToken"},
+                )
+            )
+            assert deleted["snippets"] == []
+            assert deleted["total_matches"] == 0
+            assert "Do not answer from memory" in deleted["message"]
+
+            survivor = _payload(
+                await session.call_tool(
+                    "get-library-docs",
+                    {"libraryId": "local/auth", "query": "validateSession"},
+                )
+            )
+            assert survivor["snippets"]
+            assert survivor["snippets"][0]["source"] == "auth.md"
 
 
 @pytest.mark.anyio

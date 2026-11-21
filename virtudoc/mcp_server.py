@@ -163,8 +163,10 @@ def build_server(config: Config) -> MCPServer:
                     "total_matches": 0,
                     "has_more": False,
                     "message": (
-                        "no fragments found; try a keyword query. "
-                        "Top-level sections of this library:"
+                        "no fragments found; the indexed documentation does not "
+                        "cover this query. Do not answer from memory: rephrase with "
+                        "the library's keywords or state that the documentation does "
+                        "not cover it. Top-level sections of this library:"
                     ),
                     "sections": [
                         {

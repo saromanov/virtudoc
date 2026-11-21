@@ -177,8 +177,9 @@ Fragments mode returns:
 - When docs and project versions diverge (see
   [Version drift](versions.md)), the output starts with a
   `version_mismatch` block naming both versions and the manifest.
-- When nothing matches, `snippets` is empty and `sections` lists the
-  library's top-level sections to help rephrase the query.
+- When nothing matches, `snippets` is empty, `message` tells the agent not
+  to answer from memory, and `sections` lists the library's top-level
+  sections to help rephrase the query.
 - Exceeding the budget is not an error: the page ends before the next
   fragment, and a fragment larger than the whole budget is truncated.
 
