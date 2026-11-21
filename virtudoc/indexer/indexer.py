@@ -131,17 +131,14 @@ def _target_library_id(
     replace: bool,
 ) -> str:
     """Pick the id for a release/version pair, keeping the canonical id stable."""
+    # A working branch always owns a variant id: ``--replace`` must never
+    # convert the canonical release into a branch.
+    if channel != "release":
+        return variant_library_id(name, version=version, channel=channel)
     base_id = library_id(name)
     base = conn.execute("SELECT * FROM libraries WHERE id = ?", (base_id,)).fetchone()
     if replace:
-        if base is not None:
-            return base_id
-        for row in _family_rows(conn, name):
-            if (row["version"] or None) == version and row["channel"] == channel:
-                return row["id"]
         return base_id
-    if channel != "release":
-        return variant_library_id(name, version=version, channel=channel)
     if base is None:
         return base_id
     if version is not None and (base["version"] or None) != version:
@@ -182,13 +179,18 @@ def _write_library(
             "use --replace to overwrite"
         )
 
-    lib_id = _target_library_id(
-        conn,
-        name,
-        version=version,
-        channel=channel,
-        replace=replace,
-    )
+    if duplicate is not None:
+        # Replace the row that actually holds this version/channel, not the
+        # canonical release: overwriting it would duplicate the variant.
+        lib_id = duplicate["id"]
+    else:
+        lib_id = _target_library_id(
+            conn,
+            name,
+            version=version,
+            channel=channel,
+            replace=replace,
+        )
     row = conn.execute("SELECT id FROM libraries WHERE id = ?", (lib_id,)).fetchone()
     if row and not replace:
         raise LibraryExistsError(f"library '{lib_id}' already exists; use --replace to overwrite")

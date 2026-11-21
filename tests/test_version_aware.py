@@ -58,6 +58,27 @@ def test_branch_never_takes_the_canonical_id(conn, docs_dir):
     assert add_library(conn, docs_dir, "demo", version="1.0") == "local/demo"
 
 
+def test_replace_branch_does_not_overwrite_the_canonical_release(conn, docs_dir):
+    add_library(conn, docs_dir, "demo", version="1.0")
+    branch_id = add_library(conn, docs_dir, "demo", channel="branch", replace=True)
+
+    assert branch_id == "local/demo@branch"
+    release = get_library(conn, "local/demo")
+    assert release["channel"] == "release"
+    assert release["version"] == "1.0"
+    assert get_library(conn, branch_id)["channel"] == "branch"
+
+
+def test_replace_updates_the_existing_version_variant(conn, docs_dir):
+    add_library(conn, docs_dir, "demo", version="1.0")
+    add_library(conn, docs_dir, "demo", version="2.0")
+    lib_id = add_library(conn, docs_dir, "demo", version="2.0", replace=True)
+
+    assert lib_id == "local/demo@2.0"
+    assert get_library(conn, "local/demo")["version"] == "1.0"
+    assert get_library(conn, "local/demo@2.0")["version"] == "2.0"
+
+
 def test_variant_library_id_sanitizes_the_suffix():
     assert variant_library_id("demo", version="2.0") == "local/demo@2.0"
     assert variant_library_id("demo", channel="branch") == "local/demo@branch"

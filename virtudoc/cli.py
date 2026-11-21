@@ -164,23 +164,23 @@ def cmd_list(args: argparse.Namespace, cfg: Config) -> int:
 
 
 def cmd_remove(args: argparse.Namespace, cfg: Config) -> int:
-    lib_id = args.name if args.name.startswith("local/") else f"local/{args.name}"
-    if not args.yes:
-        try:
-            answer = input(f"Remove library {lib_id} and all its data? [y/N] ")
-        except EOFError:
-            print("cancelled (non-interactive shell: pass --yes to remove)")
-            return 0
-        if answer.strip().lower() not in ("y", "yes"):
-            print("cancelled")
-            return 0
     with _open(cfg) as conn:
         try:
-            get_library(conn, args.name)
+            lib = get_library(conn, args.name)
         except LibraryNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        delete_library(conn, args.name)
+        lib_id = lib["id"]
+        if not args.yes:
+            try:
+                answer = input(f"Remove library {lib_id} and all its data? [y/N] ")
+            except EOFError:
+                print("cancelled (non-interactive shell: pass --yes to remove)")
+                return 0
+            if answer.strip().lower() not in ("y", "yes"):
+                print("cancelled")
+                return 0
+        delete_library(conn, lib_id)
     print(f"removed library {lib_id}")
     return 0
 
