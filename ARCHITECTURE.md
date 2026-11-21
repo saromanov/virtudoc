@@ -106,12 +106,18 @@ the matching id when one exists.
 | `chunks_fts` | Virtual FTS5 table | `text` (external content of `chunks`), linked by `rowid` |
 | `notes` | Project notes (KF-03, M3) | `library_id`, `library_name`, `origin_library_id`, `version`, `text`, `created_at`, `source_rev`, `pinned`, `reviewed_at`, `anchor_kind` |
 | `note_anchors` | Documents a note relies on | `note_id`, `library_id`, `rel_path`, `content_hash`, `anchored_at` |
+| `note_symbols` | Identifiers a note relies on | `note_id`, `symbol`, `anchored_at` |
 | `project_links` | Manifest links (KF-04, M3) | `manifest_path`, `dep_version` |
 | `meta` | Schema version | `key`, `value` |
 
 Notes belong to the logical library (`notes.library_name`), so each variant
-sees them. `notes.anchor_kind` is `documents`, `library` or `none`;
-`note_anchors` stores the content hashes a note was confirmed against.
+sees them; `notes.scope_version` restricts a note to one variant.
+`notes.anchor_kind` is `documents`, `symbols`, `library` or `none`;
+`note_anchors` stores the content hashes a note was confirmed against and
+`note_symbols` the identifiers found in the docs at anchor time. Symbol
+anchors are checked against every served variant, which makes them the
+cross-version signal (`symbol_removed`). `coverage.py` extracts identifiers
+and answers whether the docs mention one, using the trigram index.
 `notes.source_rev` fingerprints the whole variant and stays as the baseline
 for library-level anchors. Agents get `current`/`stale`/`unknown` per note,
 plus `notes_warning` when an anchor changed. `libraries.source_fingerprint`
@@ -138,6 +144,7 @@ annotated code block in the chunk and feeds the `language` boost of
 | `notes.max_note_tokens` | 300 | Reject longer note text at `note add`/`edit` |
 | `notes.auto_anchor_k` / `auto_anchor_ratio` | 3 / 0.5 | Documents auto-anchored from the note text |
 | `notes.pinned_max_tokens` | 400 | Budget for pinned notes in a response |
+| `notes.max_symbols` | 10 | Symbol anchors extracted from one note |
 | `server.transport` / `http_host` / `http_port` | stdio / 127.0.0.1 / 8765 | MCP transport (M2) |
 | `log.level` | INFO | Log at `~/.virtudoc/virtudoc.log` |
 

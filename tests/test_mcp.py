@@ -863,3 +863,54 @@ async def test_get_library_docs_omits_notes_instead_of_truncating(home_index):
     payload = _payload(result)
     assert payload["notes"] == []
     assert payload["notes_omitted"] == 1
+
+
+@pytest.mark.anyio
+async def test_get_library_docs_reports_missing_identifiers_and_mentions(home_index):
+    from virtudoc.notes import add_note
+
+    with open_db(Config().db_path) as conn:
+        library = conn.execute("SELECT id FROM libraries").fetchone()
+        add_note(conn, library["id"], "Prefer retryWithJitter for flaky calls.", no_anchor=True)
+
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": library["id"], "query": "retryWithJitter auth"},
+            )
+    payload = _payload(result)
+    assert payload["missing_identifiers"] == ["retryWithJitter"]
+    note = payload["notes"][0]
+    assert note["status"] == "unknown"
+    assert note["mentions_missing"] == ["retryWithJitter"]
+    keys = list(payload)
+    assert keys.index("missing_identifiers") < keys.index("notes")
+    assert keys.index("notes") < keys.index("snippets")
+
+
+@pytest.mark.anyio
+async def test_note_status_is_computed_after_refresh(home_index):
+    from virtudoc.notes import add_note
+
+    with open_db(Config().db_path) as conn:
+        library = conn.execute("SELECT id, source_path FROM libraries").fetchone()
+        add_note(conn, library["id"], "Use the retry helper.", paths=["api.md"])
+
+    # Change the source after indexing: get-library-docs refreshes the index
+    # first, so the status must already see the new content hash.
+    (Path(library["source_path"]) / "api.md").write_text(
+        "# API Reference\n\n## Retry\n\nChanged after indexing.\n"
+    )
+
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": library["id"], "query": "retry helper"},
+            )
+    payload = _payload(result)
+    assert payload["notes"][0]["status"] == "stale"
+    assert payload["notes"][0]["stale_reason"] == "anchor_changed"

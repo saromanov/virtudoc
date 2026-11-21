@@ -24,6 +24,7 @@ DEFAULTS: dict[str, dict[str, object]] = {
         "auto_anchor_k": 3,
         "auto_anchor_ratio": 0.5,
         "pinned_max_tokens": 400,
+        "max_symbols": 10,
     },
     "server": {
         "transport": "stdio",

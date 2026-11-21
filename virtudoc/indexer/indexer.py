@@ -243,9 +243,31 @@ def add_library(
 
 def delete_library(conn: sqlite3.Connection, name: str) -> None:
     try:
-        lib_id = get_library(conn, name)["id"]
+        lib = get_library(conn, name)
     except LibraryNotFoundError:
-        lib_id = name if name.startswith("local/") else library_id(name)
+        lib = conn.execute(
+            "SELECT * FROM libraries WHERE id = ?",
+            (name if name.startswith("local/") else library_id(name),),
+        ).fetchone()
+    if lib is None:
+        return
+    lib_id = lib["id"]
+    # Notes belong to the logical library: removing one variant keeps them,
+    # re-pointing the origin at a remaining variant. Only the last variant
+    # takes the notes with it (via the notes.library_id foreign key).
+    remaining = conn.execute(
+        "SELECT id FROM libraries WHERE name = ? AND id <> ? ORDER BY id LIMIT 1",
+        (lib["name"], lib_id),
+    ).fetchone()
+    if remaining is not None:
+        conn.execute(
+            "UPDATE notes SET library_id = ? WHERE library_id = ?", (remaining["id"], lib_id)
+        )
+        conn.execute(
+            "UPDATE notes SET origin_library_id = ? WHERE origin_library_id = ?",
+            (remaining["id"], lib_id),
+        )
+    conn.execute("DELETE FROM note_anchors WHERE library_id = ?", (lib_id,))
     delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.execute("DELETE FROM meta WHERE key = ?", (_failure_key(lib_id),))

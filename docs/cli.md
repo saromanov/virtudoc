@@ -94,9 +94,9 @@ in both modes.
 ```bash
 virtudoc note add <name> --text "Convention or gotcha" [--path <rel_path>] \
     [--version V] [--pin] [--no-anchor]
-virtudoc note list <name>
+virtudoc note list <name> [--version V] [--stale-only] [--json]
 virtudoc note review <name> <id> [--version V] [--reanchor]
-virtudoc note review <name> --all [--version V] [--yes]
+virtudoc note review <name> --all [--stale-only] [--version V] [--yes]
 virtudoc note edit <name> <id> --text "..."
 virtudoc note pin <name> <id>
 virtudoc note unpin <name> <id>
@@ -105,10 +105,13 @@ virtudoc note remove <name> --id N
 
 Notes are attached to a logical library, survive reindexing and are delivered
 to agents together with documentation. Each note is anchored to the documents
-it relies on; agents receive `current`/`stale`/`unknown` status with every
-note and a `notes_warning` when any note may be outdated. `note list` shows
-status, pin, version, review date and anchors; `doctor` flags stale notes with
-the reason and the review command. See [Project notes](notes.md).
+and code identifiers it relies on; agents receive `current`/`stale`/`unknown`
+status with every note and a `notes_warning` when any note may be outdated.
+`note list` shows status, reason, pin, scope version, review date and anchors;
+`--json` prints the MCP note objects. `doctor` flags stale notes with the
+reason and the edit/review command. `review` refuses to confirm a note whose
+symbol anchor disappeared unless `--reanchor` is passed. See
+[Project notes](notes.md).
 
 ## init — project onboarding
 

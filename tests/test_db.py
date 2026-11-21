@@ -408,12 +408,12 @@ def test_migrates_v5_db_to_note_anchors(tmp_path):
 
     conn = open_db(path)
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert "note_anchors" in tables
+    assert {"note_anchors", "note_symbols"} <= tables
     columns = {row[1] for row in conn.execute("PRAGMA table_info(notes)")}
     assert {
         "library_name",
         "origin_library_id",
-        "version",
+        "scope_version",
         "pinned",
         "reviewed_at",
         "anchor_kind",

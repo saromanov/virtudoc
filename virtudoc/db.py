@@ -92,6 +92,7 @@ def _schema_ready(conn: sqlite3.Connection) -> bool:
         "chunks_tri",
         "notes",
         "note_anchors",
+        "note_symbols",
         "project_links",
         "meta",
     }
@@ -173,11 +174,20 @@ def init_schema(conn: sqlite3.Connection) -> None:
             source_rev TEXT NOT NULL DEFAULT '',
             library_name TEXT,
             origin_library_id TEXT,
-            version TEXT,
+            scope_version TEXT,
             pinned INTEGER NOT NULL DEFAULT 0,
             reviewed_at TEXT,
             anchor_kind TEXT NOT NULL DEFAULT 'library'
         );
+
+        CREATE TABLE IF NOT EXISTS note_symbols (
+            note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            anchored_at TEXT NOT NULL,
+            PRIMARY KEY (note_id, symbol)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_symbols_symbol ON note_symbols(symbol);
 
         CREATE TABLE IF NOT EXISTS note_anchors (
             note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
@@ -225,7 +235,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         # The logical library name makes them visible to every variant.
         conn.execute("ALTER TABLE notes ADD COLUMN library_name TEXT")
         conn.execute("ALTER TABLE notes ADD COLUMN origin_library_id TEXT")
-        conn.execute("ALTER TABLE notes ADD COLUMN version TEXT")
+        conn.execute("ALTER TABLE notes ADD COLUMN scope_version TEXT")
         conn.execute("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
         conn.execute("ALTER TABLE notes ADD COLUMN reviewed_at TEXT")
         conn.execute("ALTER TABLE notes ADD COLUMN anchor_kind TEXT NOT NULL DEFAULT 'library'")

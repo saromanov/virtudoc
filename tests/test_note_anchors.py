@@ -185,7 +185,7 @@ def test_notes_belong_to_logical_library_across_versions(conn, docs_dir, tmp_pat
 def test_version_scoped_note_is_hidden_from_other_versions(conn, docs_dir, tmp_path):
     canonical = add_library(conn, docs_dir, "demo")
     index_library(conn, canonical, Chunker())
-    add_note(conn, canonical, "Middleware rule for 2.0.", version="2.0", no_anchor=True)
+    add_note(conn, canonical, "Middleware rule for 2.0.", scope_version="2.0", no_anchor=True)
 
     other = tmp_path / "docs2"
     other.mkdir()
@@ -203,3 +203,97 @@ def test_pin_and_unpin(conn, lib):
     assert note_statuses(conn, lib)[0].pinned is True
     assert set_pinned(conn, lib, note_id, False) is True
     assert note_statuses(conn, lib)[0].pinned is False
+
+
+def test_symbols_only_note_when_autosearch_finds_nothing(conn, lib, docs_dir, monkeypatch):
+    import virtudoc.notes as notes_module
+
+    (docs_dir / "api.md").write_text(
+        "# API\n\nvalidateSession() and issueLegacyToken are used here.\n"
+    )
+    _reindex(conn, lib)
+    monkeypatch.setattr(notes_module, "auto_anchor_documents", lambda *args, **kwargs: [])
+
+    add_note(conn, lib, "Call validateSession() before issueLegacyToken.")
+    note = note_statuses(conn, lib)[0]
+    assert note.anchor_kind == "symbols"
+    assert note.symbols == ["issueLegacyToken", "validateSession"]
+    assert note.status == "current"
+
+
+def test_removed_symbol_makes_note_stale(conn, lib, docs_dir):
+    (docs_dir / "api.md").write_text(
+        "# API\n\nvalidateSession() and issueLegacyToken are used here.\n"
+    )
+    _reindex(conn, lib)
+    add_note(conn, lib, "Call validateSession() before issueLegacyToken.", paths=["api.md"])
+
+    (docs_dir / "api.md").write_text("# API\n\nvalidateSession() only.\n")
+    _reindex(conn, lib)
+
+    note = note_statuses(conn, lib)[0]
+    assert note.status == "stale"
+    assert note.stale_reason == "symbol_removed"
+    assert note.missing_symbols == ["issueLegacyToken"]
+
+
+def test_review_refuses_to_accept_removed_symbol(conn, lib, docs_dir):
+    from virtudoc.notes import SymbolRemovedError
+
+    (docs_dir / "api.md").write_text("# API\n\nissueLegacyToken here.\n")
+    _reindex(conn, lib)
+    note_id = add_note(conn, lib, "Use issueLegacyToken.", paths=["api.md"])
+    (docs_dir / "api.md").write_text("# API\n\nSomething else.\n")
+    _reindex(conn, lib)
+
+    with pytest.raises(SymbolRemovedError) as excinfo:
+        review_note(conn, lib, note_id)
+    assert "issueLegacyToken" in str(excinfo.value)
+
+    assert review_note(conn, lib, note_id, reanchor=True) is True
+    note = note_statuses(conn, lib)[0]
+    assert note.status != "stale"
+
+
+def test_mentions_missing_marks_note_text(conn, lib):
+    from virtudoc.notes import apply_mentions_missing
+
+    add_note(conn, lib, "Prefer retryWithJitter for flaky calls.", no_anchor=True)
+    notes = note_statuses(conn, lib)
+    apply_mentions_missing(notes, ["retryWithJitter", "somethingElse"])
+    assert notes[0].mentions_missing == ["retryWithJitter"]
+    assert note_statuses(conn, lib)[0].status == "unknown"
+
+
+def test_remove_variant_keeps_notes_until_the_last_one(conn, docs_dir, tmp_path):
+    from virtudoc.indexer.indexer import add_library, delete_library
+
+    canonical = add_library(conn, docs_dir, "demo")
+    index_library(conn, canonical, Chunker())
+    add_note(conn, canonical, "Convention.", paths=["api.md"])
+
+    other = tmp_path / "docs2"
+    other.mkdir()
+    (other / "api.md").write_text("# API\n")
+    variant = add_library(conn, other, "demo", version="2.0")
+    index_library(conn, variant, Chunker())
+
+    delete_library(conn, variant)
+    assert [note.text for note in note_statuses(conn, canonical)] == ["Convention."]
+    assert conn.execute("SELECT COUNT(*) FROM libraries").fetchone()[0] == 1
+
+    delete_library(conn, canonical)
+    assert note_statuses(conn, canonical) == []
+
+
+def test_replace_keeps_anchors_and_reports_change(conn, lib, docs_dir):
+    from virtudoc.indexer.indexer import add_library
+
+    add_note(conn, lib, "Use the retry helper.", paths=["api.md"])
+    (docs_dir / "api.md").write_text("# API Reference\n\nRetry moved.\n")
+    add_library(conn, docs_dir, "demo", replace=True)
+    _reindex(conn, lib)
+
+    note = note_statuses(conn, lib)[0]
+    assert note.status == "stale"
+    assert note.stale_reason == "anchor_changed"

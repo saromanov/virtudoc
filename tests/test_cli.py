@@ -608,8 +608,8 @@ def test_note_add_with_anchors_and_review_flow(home, docs_dir, capsys):
 
     assert main(["note", "add", "demo", "--text", "Use the retry helper.", "--path", "api.md"]) == 0
     out = capsys.readouterr().out
-    assert "Note #1 added to demo, anchored to:" in out
-    assert "api.md" in out
+    assert "Note #1 added to demo." in out
+    assert "anchored documents: api.md" in out
 
     (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nMoved.\n")
     assert main(["update"]) == 0
@@ -674,3 +674,97 @@ def test_note_review_all_requires_yes(home, docs_dir, capsys):
     assert main(["note", "review", "demo", "--all", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "reviewed 2 note(s) of demo" in out
+
+
+def test_note_add_reports_symbol_anchors(home, docs_dir, capsys):
+    (docs_dir / "api.md").write_text("# API\n\nissueLegacyToken is gone in 3.0.\n")
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "note",
+                "add",
+                "demo",
+                "--text",
+                "Use issueLegacyToken() and retryWithJitter().",
+                "--path",
+                "api.md",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "anchored symbols:   issueLegacyToken" in out
+    assert "not in docs (not tracked): retryWithJitter" in out
+
+
+def test_note_review_refuses_removed_symbol_until_reanchor(home, docs_dir, capsys):
+    (docs_dir / "api.md").write_text("# API\n\nissueLegacyToken here.\n")
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    assert main(["note", "add", "demo", "--text", "Use issueLegacyToken.", "--path", "api.md"]) == 0
+    capsys.readouterr()
+
+    (docs_dir / "api.md").write_text("# API\n\nSomething else.\n")
+    assert main(["update"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "review", "demo", "1"]) == 1
+    err = capsys.readouterr().err
+    assert "issueLegacyToken, which is no longer in the docs" in err
+    assert "or accept it:" in err
+
+    assert main(["note", "review", "demo", "1", "--reanchor"]) == 0
+    assert "reviewed note #1" in capsys.readouterr().out
+
+
+def test_note_list_json_and_stale_only(home, docs_dir, capsys):
+    import json
+
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    assert main(["note", "add", "demo", "--text", "Current note.", "--path", "guide.md"]) == 0
+    assert main(["note", "add", "demo", "--text", "Stale note.", "--path", "api.md"]) == 0
+    capsys.readouterr()
+
+    (docs_dir / "api.md").write_text("# API\n\nChanged.\n")
+    assert main(["update"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "list", "demo", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {item["status"] for item in payload} == {"current", "stale"}
+    assert "scope_version" in payload[0]
+
+    assert main(["note", "list", "demo", "--stale-only"]) == 0
+    out = capsys.readouterr().out
+    assert "Stale note." in out
+    assert "Current note." not in out
+
+
+def test_note_pin_warns_which_notes_are_omitted(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    text = "Pinned convention: " + "detail " * 150
+    assert main(["note", "add", "demo", "--text", text, "--pin"]) == 0
+    assert main(["note", "add", "demo", "--text", text, "--pin"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "pin", "demo", "2"]) == 0
+    err = capsys.readouterr().err
+    assert "will be omitted from agent responses" in err
+    assert "#1" in err
+
+
+def test_doctor_reports_oversized_note(home, docs_dir, capsys):
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+    from virtudoc.notes import add_note
+
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+    with open_db(Config().db_path) as conn:
+        add_note(conn, "local/demo", "middleware " * 400, no_anchor=True)
+
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "split this note" in out

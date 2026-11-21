@@ -4,6 +4,11 @@ import difflib
 import sqlite3
 from dataclasses import dataclass, field
 
+from .coverage import (
+    IdentifierChecker,
+    extract_identifiers,
+    library_has_identifier,
+)
 from .db import (
     fts_normalize,
     refresh_source_fingerprint,
@@ -12,15 +17,26 @@ from .db import (
 )
 from .search.engine import _TOKEN_RE, MIN_TOPIC_PREFIX, _stem, search, tokenize
 from .tokens import estimate_tokens
-from .versions import version_status
 
 STATUS_CURRENT = "current"
 STATUS_STALE = "stale"
 STATUS_UNKNOWN = "unknown"
 
 ANCHOR_DOCUMENTS = "documents"
+ANCHOR_SYMBOLS = "symbols"
 ANCHOR_LIBRARY = "library"
 ANCHOR_NONE = "none"
+
+
+class SymbolRemovedError(ValueError):
+    """Review without --reanchor while symbol anchors are gone from the docs."""
+
+    def __init__(self, note_id: int, symbols: list[str]) -> None:
+        self.note_id = note_id
+        self.symbols = symbols
+        super().__init__(
+            f"note #{note_id} references {', '.join(symbols)}, which is no longer in the docs"
+        )
 
 
 def _note_token_matches(token: str, words: list[str]) -> bool:
@@ -43,13 +59,16 @@ class Note:
     score: int = 0
     library_name: str = ""
     origin_library_id: str = ""
-    version: str | None = None
+    scope_version: str | None = None
     pinned: bool = False
     reviewed_at: str | None = None
     anchor_kind: str = ANCHOR_LIBRARY
     status: str = STATUS_UNKNOWN
     stale_reason: str | None = None
     changed_sources: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
+    missing_symbols: list[str] = field(default_factory=list)
+    mentions_missing: list[str] = field(default_factory=list)
 
     @property
     def reviewed_or_created(self) -> str:
@@ -77,10 +96,10 @@ class Anchor:
 def source_revision(conn: sqlite3.Connection, library_id: str) -> str:
     """Fingerprint of the indexed source: the docs an agent reads right now.
 
-    Built from the paths and content hashes of the indexed documents, so it
-    works for non-git sources too and never depends on the working tree state.
+    Reads the cached `libraries.source_fingerprint`; when it is NULL (old
+    database, failed indexing run) it computes and stores it.
     """
-    return source_fingerprint(conn, library_id)
+    return _cached_fingerprint(conn, library_id)
 
 
 def _library_row(conn: sqlite3.Connection, name_or_id: str) -> sqlite3.Row | None:
@@ -103,13 +122,19 @@ def _variant_name(conn: sqlite3.Connection, library_id: str) -> str:
 
 
 def _cached_fingerprint(conn: sqlite3.Connection, library_id: str) -> str:
-    """Cached fingerprint when the indexer recorded one, computed otherwise."""
+    """Cached fingerprint; computes and stores it when the indexer left NULL."""
     row = conn.execute(
         "SELECT source_fingerprint FROM libraries WHERE id = ?", (library_id,)
     ).fetchone()
     if row is not None and row["source_fingerprint"]:
         return row["source_fingerprint"]
-    return source_fingerprint(conn, library_id)
+    fingerprint = source_fingerprint(conn, library_id)
+    conn.execute(
+        "UPDATE libraries SET source_fingerprint = ? WHERE id = ?",
+        (fingerprint, library_id),
+    )
+    conn.commit()
+    return fingerprint
 
 
 def _document_hash(conn: sqlite3.Connection, library_id: str, rel_path: str) -> str | None:
@@ -202,6 +227,23 @@ def _write_anchors(
     return anchors
 
 
+def _write_symbols(
+    conn: sqlite3.Connection,
+    note_id: int,
+    symbols: list[str],
+    *,
+    replace: bool = True,
+) -> None:
+    if replace:
+        conn.execute("DELETE FROM note_symbols WHERE note_id = ?", (note_id,))
+    now = utc_now()
+    for symbol in dict.fromkeys(symbols):
+        conn.execute(
+            "INSERT OR REPLACE INTO note_symbols (note_id, symbol, anchored_at) VALUES (?, ?, ?)",
+            (note_id, symbol, now),
+        )
+
+
 def add_note(
     conn: sqlite3.Connection,
     library_id: str,
@@ -209,11 +251,12 @@ def add_note(
     source_rev: str | None = None,
     *,
     paths: list[str] | None = None,
-    version: str | None = None,
+    scope_version: str | None = None,
     pinned: bool = False,
     no_anchor: bool = False,
     auto_anchor_k: int = 3,
     auto_anchor_ratio: float = 0.5,
+    max_symbols: int = 10,
 ) -> int:
     """Attach a note to a logical library, anchored to the docs it relies on.
 
@@ -231,29 +274,40 @@ def add_note(
         source_rev = source_fingerprint(conn, variant_id)
 
     selected: list[str] = []
+    symbols: list[str] = []
     if no_anchor:
         anchor_kind = ANCHOR_NONE
-    elif paths:
-        missing = [path for path in paths if _document_hash(conn, variant_id, path) is None]
-        if missing:
-            hints = []
-            for path in missing:
-                closest = nearest_paths(conn, variant_id, path)
-                hints.append(f"{path} (closest: {', '.join(closest) or 'none'})")
-            raise ValueError("anchor paths not in the index: " + "; ".join(hints))
-        selected = list(dict.fromkeys(paths))
-        anchor_kind = ANCHOR_DOCUMENTS
     else:
-        selected = auto_anchor_documents(
-            conn, variant_id, text, k=auto_anchor_k, ratio=auto_anchor_ratio
-        )
-        anchor_kind = ANCHOR_DOCUMENTS if selected else ANCHOR_LIBRARY
+        identifiers = extract_identifiers(text, limit=max_symbols)
+        symbols = [
+            symbol for symbol in identifiers if library_has_identifier(conn, variant_id, symbol)
+        ]
+        if paths:
+            missing = [path for path in paths if _document_hash(conn, variant_id, path) is None]
+            if missing:
+                hints = []
+                for path in missing:
+                    closest = nearest_paths(conn, variant_id, path)
+                    hints.append(f"{path} (closest: {', '.join(closest) or 'none'})")
+                raise ValueError("anchor paths not in the index: " + "; ".join(hints))
+            selected = list(dict.fromkeys(paths))
+            anchor_kind = ANCHOR_DOCUMENTS
+        else:
+            selected = auto_anchor_documents(
+                conn, variant_id, text, k=auto_anchor_k, ratio=auto_anchor_ratio
+            )
+            if selected:
+                anchor_kind = ANCHOR_DOCUMENTS
+            elif symbols:
+                anchor_kind = ANCHOR_SYMBOLS
+            else:
+                anchor_kind = ANCHOR_LIBRARY
 
     cur = conn.execute(
         """
         INSERT INTO notes
             (library_id, text, created_at, source_rev, library_name,
-             origin_library_id, version, pinned, reviewed_at, anchor_kind)
+             origin_library_id, scope_version, pinned, reviewed_at, anchor_kind)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -263,7 +317,7 @@ def add_note(
             source_rev,
             variant_name,
             variant_id,
-            version,
+            scope_version,
             1 if pinned else 0,
             utc_now(),
             anchor_kind,
@@ -272,6 +326,8 @@ def add_note(
     note_id = int(cur.lastrowid)
     if anchor_kind == ANCHOR_DOCUMENTS:
         _write_anchors(conn, note_id, variant_id, selected)
+    if symbols:
+        _write_symbols(conn, note_id, symbols)
     conn.commit()
     return note_id
 
@@ -284,7 +340,7 @@ def _note_from_row(row: sqlite3.Row) -> Note:
         source_rev=row["source_rev"] or "",
         library_name=row["library_name"] or "",
         origin_library_id=row["origin_library_id"] or row["library_id"],
-        version=row["version"],
+        scope_version=row["scope_version"],
         pinned=bool(row["pinned"]),
         reviewed_at=row["reviewed_at"],
         anchor_kind=row["anchor_kind"] or ANCHOR_LIBRARY,
@@ -293,7 +349,7 @@ def _note_from_row(row: sqlite3.Row) -> Note:
 
 _NOTE_COLUMNS = """
     n.id, n.text, n.created_at, n.source_rev, n.library_id, n.library_name,
-    n.origin_library_id, n.version, n.pinned, n.reviewed_at, n.anchor_kind
+    n.origin_library_id, n.scope_version, n.pinned, n.reviewed_at, n.anchor_kind
 """
 
 
@@ -321,15 +377,34 @@ def note_anchors(
     ).fetchall()
 
 
+def note_symbols(conn: sqlite3.Connection, note_id: int) -> list[str]:
+    return [
+        row["symbol"]
+        for row in conn.execute(
+            "SELECT symbol FROM note_symbols WHERE note_id = ? ORDER BY symbol", (note_id,)
+        )
+    ]
+
+
 def _describe_status(
     conn: sqlite3.Connection,
     note: Note,
     variant_id: str,
     anchors: list[dict],
+    symbols: list[str],
+    checker: IdentifierChecker,
 ) -> None:
     """Set status, stale_reason and changed_sources on the note in place."""
+    note.symbols = symbols
     if note.anchor_kind == ANCHOR_NONE:
         note.status = STATUS_UNKNOWN
+        return
+
+    missing_symbols = [symbol for symbol in symbols if not checker.has(symbol)]
+    if missing_symbols:
+        note.status = STATUS_STALE
+        note.stale_reason = "symbol_removed"
+        note.missing_symbols = missing_symbols
         return
 
     variant_anchors = [a for a in anchors if a["library_id"] == variant_id]
@@ -368,6 +443,11 @@ def _describe_status(
             note.status = STATUS_CURRENT
         return
 
+    if note.anchor_kind == ANCHOR_SYMBOLS:
+        # No document anchors: the symbols were found in the served variant.
+        note.status = STATUS_CURRENT
+        return
+
     if not note.source_rev:
         note.status = STATUS_UNKNOWN
         return
@@ -379,7 +459,12 @@ def _describe_status(
         note.stale_reason = "library_changed"
 
 
-def note_statuses(conn: sqlite3.Connection, library_id: str) -> list[Note]:
+def note_statuses(
+    conn: sqlite3.Connection,
+    library_id: str,
+    *,
+    checker: IdentifierChecker | None = None,
+) -> list[Note]:
     """Notes of the logical library with staleness relative to this variant.
 
     One query fetches the notes, their anchors (current and origin variant)
@@ -424,8 +509,25 @@ def note_statuses(conn: sqlite3.Connection, library_id: str) -> list[Note]:
                 }
             )
     ordered = [notes[key] for key in sorted(notes)]
+    symbol_rows: dict[int, list[str]] = {}
+    if ordered:
+        placeholders = ",".join("?" for _ in ordered)
+        for row in conn.execute(
+            f"SELECT note_id, symbol FROM note_symbols WHERE note_id IN ({placeholders}) "
+            "ORDER BY symbol",
+            tuple(note.id for note in ordered),
+        ):
+            symbol_rows.setdefault(row["note_id"], []).append(row["symbol"])
+    checker = checker or IdentifierChecker(conn, variant_id)
     for note in ordered:
-        _describe_status(conn, note, variant_id, anchors[note.id])
+        _describe_status(
+            conn,
+            note,
+            variant_id,
+            anchors[note.id],
+            symbol_rows.get(note.id, []),
+            checker,
+        )
     return ordered
 
 
@@ -437,15 +539,16 @@ def remove_note(conn: sqlite3.Connection, library_id: str, note_id: int) -> bool
     # Anchors are deleted explicitly as well: servable databases may have been
     # created before foreign keys were enabled.
     conn.execute("DELETE FROM note_anchors WHERE note_id = ?", (note_id,))
+    conn.execute("DELETE FROM note_symbols WHERE note_id = ?", (note_id,))
     cur = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
     conn.commit()
     return cur.rowcount > 0
 
 
-def _version_matches(note_version: str | None, variant_version: str | None) -> bool:
-    if note_version is None:
+def _version_matches(scope_version: str | None, variant_version: str | None) -> bool:
+    if scope_version is None:
         return True
-    return version_status(variant_version, note_version) == "match"
+    return variant_version is not None and scope_version == variant_version
 
 
 def select_notes(
@@ -455,6 +558,7 @@ def select_notes(
     *,
     budget_tokens: int = 800,
     pinned_budget_tokens: int = 400,
+    checker: IdentifierChecker | None = None,
 ) -> NotesSelection:
     """Notes for an agent response: pinned first, then query matches.
 
@@ -463,11 +567,12 @@ def select_notes(
     rule could change its meaning, so overflow is reported as ``omitted``.
     """
     variant = _library_row(conn, library_id)
+    variant_id = variant["id"] if variant is not None else library_id
     variant_version = variant["version"] if variant is not None else None
     notes = [
         note
-        for note in note_statuses(conn, library_id)
-        if _version_matches(note.version, variant_version)
+        for note in note_statuses(conn, variant_id, checker=checker)
+        if _version_matches(note.scope_version, variant_version)
     ]
     tokens = tokenize(query)
     for note in notes:
@@ -536,57 +641,77 @@ def review_note(
     reanchor: bool = False,
     auto_anchor_k: int = 3,
     auto_anchor_ratio: float = 0.5,
+    max_symbols: int = 10,
 ) -> bool:
-    """Confirm that the note matches the documentation of this variant."""
+    """Confirm that the note matches the documentation of this variant.
+
+    A missing symbol anchor is an error unless ``reanchor`` is set: silently
+    confirming a note that mentions a removed identifier would defeat the
+    purpose of the check.
+    """
     note = get_note(conn, library_id, note_id)
     if note is None:
         return False
+    variant = _library_row(conn, library_id)
+    variant_id = variant["id"] if variant is not None else library_id
+
+    missing_symbols = [
+        symbol
+        for symbol in note_symbols(conn, note_id)
+        if not library_has_identifier(conn, variant_id, symbol)
+    ]
+    if missing_symbols and not reanchor:
+        raise SymbolRemovedError(note_id, missing_symbols)
 
     if reanchor:
         selected = auto_anchor_documents(
             conn,
-            library_id,
+            variant_id,
             note.text,
             k=auto_anchor_k,
             ratio=auto_anchor_ratio,
         )
+        identifiers = extract_identifiers(note.text, limit=max_symbols)
+        symbols = [
+            symbol for symbol in identifiers if library_has_identifier(conn, variant_id, symbol)
+        ]
+        _write_symbols(conn, note_id, symbols)
         if selected:
-            _write_anchors(conn, note_id, library_id, selected)
+            _write_anchors(conn, note_id, variant_id, selected)
             anchor_kind = ANCHOR_DOCUMENTS
         else:
-            _write_anchors(conn, note_id, library_id, [])
-            anchor_kind = ANCHOR_LIBRARY
-    elif note.anchor_kind == ANCHOR_DOCUMENTS:
-        # Record the current hashes of anchors that still exist; a document
-        # removed from the index can no longer be confirmed.
-        rows = note_anchors(conn, note_id, library_id)
-        existing = [
-            row["rel_path"] for row in rows if _document_hash(conn, library_id, row["rel_path"])
-        ]
-        current_docs = document_hashes(conn, library_id)
-        now = utc_now()
-        for rel_path in existing:
-            conn.execute(
-                """
-                UPDATE note_anchors SET content_hash = ?, anchored_at = ?
-                WHERE note_id = ? AND library_id = ? AND rel_path = ?
-                """,
-                (current_docs[rel_path], now, note_id, library_id, rel_path),
-            )
-        missing = [
-            row["rel_path"] for row in rows if not _document_hash(conn, library_id, row["rel_path"])
-        ]
-        for rel_path in missing:
-            conn.execute(
-                "DELETE FROM note_anchors WHERE note_id = ? AND library_id = ? AND rel_path = ?",
-                (note_id, library_id, rel_path),
-            )
-        if not existing:
-            anchor_kind = ANCHOR_LIBRARY
-        else:
-            anchor_kind = ANCHOR_DOCUMENTS
+            _write_anchors(conn, note_id, variant_id, [])
+            anchor_kind = ANCHOR_SYMBOLS if symbols else ANCHOR_LIBRARY
     else:
         anchor_kind = note.anchor_kind
+        if note.anchor_kind in (ANCHOR_DOCUMENTS, ANCHOR_SYMBOLS):
+            rows = note_anchors(conn, note_id, variant_id)
+            existing = [
+                row["rel_path"] for row in rows if _document_hash(conn, variant_id, row["rel_path"])
+            ]
+            current_docs = document_hashes(conn, variant_id)
+            now = utc_now()
+            for rel_path in existing:
+                conn.execute(
+                    """
+                    UPDATE note_anchors SET content_hash = ?, anchored_at = ?
+                    WHERE note_id = ? AND library_id = ? AND rel_path = ?
+                    """,
+                    (current_docs[rel_path], now, note_id, variant_id, rel_path),
+                )
+            missing = [
+                row["rel_path"]
+                for row in rows
+                if not _document_hash(conn, variant_id, row["rel_path"])
+            ]
+            for rel_path in missing:
+                conn.execute(
+                    "DELETE FROM note_anchors "
+                    "WHERE note_id = ? AND library_id = ? AND rel_path = ?",
+                    (note_id, variant_id, rel_path),
+                )
+            if note.anchor_kind == ANCHOR_DOCUMENTS and not existing:
+                anchor_kind = ANCHOR_LIBRARY
 
     conn.execute(
         """
@@ -594,7 +719,7 @@ def review_note(
         SET reviewed_at = ?, source_rev = ?, anchor_kind = ?
         WHERE id = ?
         """,
-        (utc_now(), source_fingerprint(conn, library_id), anchor_kind, note_id),
+        (utc_now(), source_fingerprint(conn, variant_id), anchor_kind, note_id),
     )
     conn.commit()
     return True
@@ -608,6 +733,7 @@ def edit_note(
     *,
     auto_anchor_k: int = 3,
     auto_anchor_ratio: float = 0.5,
+    max_symbols: int = 10,
 ) -> bool:
     note = get_note(conn, library_id, note_id)
     if note is None:
@@ -618,8 +744,10 @@ def edit_note(
         conn,
         library_id,
         note_id,
+        reanchor=True,
         auto_anchor_k=auto_anchor_k,
         auto_anchor_ratio=auto_anchor_ratio,
+        max_symbols=max_symbols,
     )
 
 
@@ -636,6 +764,42 @@ def pinned_tokens(conn: sqlite3.Connection, library_id: str) -> int:
     return sum(
         estimate_tokens(note.text) for note in note_statuses(conn, library_id) if note.pinned
     )
+
+
+def apply_mentions_missing(notes: list[Note], missing_identifiers: list[str]) -> None:
+    """Mark notes that mention identifiers absent from the docs.
+
+    An identifier that is a symbol anchor already made the note stale
+    (`symbol_removed`); it is not repeated in `mentions_missing`.
+    """
+    for note in notes:
+        note.mentions_missing = [
+            identifier
+            for identifier in missing_identifiers
+            if identifier not in note.missing_symbols and identifier in note.text
+        ]
+
+
+def note_payload(note: Note) -> dict:
+    """The note object agents receive (`note list --json` uses it too)."""
+    payload: dict = {
+        "id": note.id,
+        "text": note.text,
+        "created_at": note.created_at,
+        "status": note.status,
+        "stale_reason": note.stale_reason,
+        "changed_sources": note.changed_sources,
+        "reviewed_at": note.reviewed_or_created,
+        "pinned": note.pinned,
+        "scope_version": note.scope_version,
+    }
+    if note.symbols:
+        payload["symbols"] = note.symbols
+    if note.missing_symbols:
+        payload["missing_symbols"] = note.missing_symbols
+    if note.mentions_missing:
+        payload["mentions_missing"] = note.mentions_missing
+    return payload
 
 
 def backfill_note_scope(conn: sqlite3.Connection) -> None:
@@ -659,6 +823,7 @@ def backfill_note_scope(conn: sqlite3.Connection) -> None:
         anchor_kind = ANCHOR_LIBRARY
         reviewed_at = row["reviewed_at"]
         selected: list[str] = []
+        symbols: list[str] = []
         if not source_rev:
             anchor_kind = ANCHOR_NONE
         elif source_rev == source_fingerprint(conn, library_id):
@@ -666,7 +831,17 @@ def backfill_note_scope(conn: sqlite3.Connection) -> None:
                 selected = auto_anchor_documents(conn, library_id, row["text"])
             except sqlite3.Error:
                 selected = []
-            anchor_kind = ANCHOR_DOCUMENTS if selected else ANCHOR_LIBRARY
+            symbols = [
+                symbol
+                for symbol in extract_identifiers(row["text"])
+                if library_has_identifier(conn, library_id, symbol)
+            ]
+            if selected:
+                anchor_kind = ANCHOR_DOCUMENTS
+            elif symbols:
+                anchor_kind = ANCHOR_SYMBOLS
+            else:
+                anchor_kind = ANCHOR_LIBRARY
             reviewed_at = utc_now()
         conn.execute(
             """
@@ -679,6 +854,8 @@ def backfill_note_scope(conn: sqlite3.Connection) -> None:
         )
         if selected:
             _write_anchors(conn, row["id"], library_id, selected)
+        if symbols:
+            _write_symbols(conn, row["id"], symbols)
     for library in conn.execute("SELECT id FROM libraries").fetchall():
         refresh_source_fingerprint(conn, library["id"])
     if rows:

@@ -15,12 +15,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
 from .config import Config, data_dir
+from .coverage import IdentifierChecker, extract_identifiers
 from .db import open_db
 from .fetcher import ensure_pinned_checkout
 from .indexer.chunker import Chunker
 from .indexer.indexer import refresh_if_stale
 from .logging_setup import get_logger
-from .notes import NotesSelection, select_notes
+from .notes import NotesSelection, apply_mentions_missing, note_payload, select_notes
 from .search.engine import library_outline, resolve_libraries, search, top_level_sections
 from .versions import (
     ResolvedVersion,
@@ -55,6 +56,8 @@ GET_DOCS_DESCRIPTION = (
     "with token estimates instead of fragments, and 'section' to restrict the "
     "output to one branch (e.g. 'API -> Middleware'). Team notes carry "
     "status='current', 'stale' or 'unknown'; notes_warning lists stale ones. "
+    "missing_identifiers lists query identifiers the documentation never "
+    "mentions; a note that mentions one carries mentions_missing. "
     "When a stale note contradicts the fragments, follow the fragments and "
     "tell the user the note may be outdated. The response warns with "
     "'version_mismatch' when the indexed docs differ from the version resolved "
@@ -65,25 +68,9 @@ GET_DOCS_DESCRIPTION = (
 NOTES_WARNING = (
     "{count} team note(s) may be outdated: the documentation they rely on "
     "changed after they were written or last reviewed. If a note contradicts "
-    "the fragments, follow the fragments and tell the user the note may be "
-    "outdated."
+    "the fragments or mentions identifiers from 'missing_identifiers', follow "
+    "the documentation and tell the user the note may be outdated."
 )
-
-
-def _notes_payload(selection: NotesSelection) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": note.id,
-            "text": note.text,
-            "created_at": note.created_at,
-            "status": note.status,
-            "stale_reason": note.stale_reason,
-            "changed_sources": note.changed_sources,
-            "reviewed_at": note.reviewed_or_created,
-            "pinned": note.pinned,
-        }
-        for note in selection.notes
-    ]
 
 
 def _doc_payload(
@@ -92,27 +79,36 @@ def _doc_payload(
     library_id: str,
     query: str,
     selection: NotesSelection,
+    context: dict[str, Any],
+    missing: list[str],
+    message: str | None,
     body_key: str,
     body: Any,
-    rest: dict[str, Any],
+    trailing: dict[str, Any],
 ) -> dict[str, Any]:
-    """Assemble the response in the documented key order.
+    """Assemble the response in the documented key order (FR-9).
 
-    `version_mismatch` → `library_id` → `query` → `notes_warning` → `notes`
-    → `snippets`/`sections` → the rest.
+    `version_mismatch` → `library_id` → `query` → mode/page/section →
+    `missing_identifiers` → `message` → `notes_warning` → `notes` →
+    `notes_omitted` → `snippets`/`sections` → totals.
     """
     payload: dict[str, Any] = {}
     if warning:
         payload["version_mismatch"] = warning
     payload["library_id"] = library_id
     payload["query"] = query
+    payload.update(context)
+    if missing:
+        payload["missing_identifiers"] = missing
+    if message:
+        payload["message"] = message
     if selection.stale_count:
         payload["notes_warning"] = NOTES_WARNING.format(count=selection.stale_count)
+    payload["notes"] = [note_payload(note) for note in selection.notes]
     if selection.omitted:
         payload["notes_omitted"] = selection.omitted
-    payload["notes"] = _notes_payload(selection)
     payload[body_key] = body
-    payload.update(rest)
+    payload.update(trailing)
     return payload
 
 
@@ -236,15 +232,21 @@ def build_server(config: Config) -> MCPServer:
                     f"library not found: {libraryId!r}; "
                     "call find-library to list available libraries"
                 )
+            # Statuses are computed after the refresh, so they always see the
+            # index an agent is about to read (FR-1.6).
             if config.get_bool("index.auto_refresh"):
                 refresh_if_stale(conn, libraryId, chunker)
+            checker = IdentifierChecker(conn, libraryId)
             selection = select_notes(
                 conn,
                 libraryId,
                 query,
                 budget_tokens=config.get_int("notes.max_tokens"),
                 pinned_budget_tokens=config.get_int("notes.pinned_max_tokens"),
+                checker=checker,
             )
+            missing = checker.missing(extract_identifiers(query))
+            apply_mentions_missing(selection.notes, missing)
             warning = mismatch_payload(conn, libraryId, project_path=projectPath)
             if mode == "outline":
                 tree = library_outline(conn, libraryId, section=section)
@@ -253,13 +255,12 @@ def build_server(config: Config) -> MCPServer:
                     library_id=libraryId,
                     query=query,
                     selection=selection,
+                    context={"mode": "outline", "section": section},
+                    missing=missing,
+                    message=None,
                     body_key="sections",
                     body=[node.to_dict() for node in tree],
-                    rest={
-                        "mode": "outline",
-                        "section": section,
-                        "total_tokens": sum(node.token_est for node in tree),
-                    },
+                    trailing={"total_tokens": sum(node.token_est for node in tree)},
                 )
             result = search(
                 conn,
@@ -278,19 +279,17 @@ def build_server(config: Config) -> MCPServer:
                     library_id=libraryId,
                     query=query,
                     selection=selection,
+                    context={"page": result.page},
+                    missing=missing,
+                    message=(
+                        "no fragments found; the indexed documentation does not "
+                        "cover this query. Do not answer from memory: rephrase with "
+                        "the library's keywords or state that the documentation does "
+                        "not cover it. Top-level sections of this library:"
+                    ),
                     body_key="snippets",
                     body=[],
-                    rest={
-                        "page": result.page,
-                        "total_tokens": 0,
-                        "total_matches": 0,
-                        "has_more": False,
-                        "message": (
-                            "no fragments found; the indexed documentation does not "
-                            "cover this query. Do not answer from memory: rephrase with "
-                            "the library's keywords or state that the documentation does "
-                            "not cover it. Top-level sections of this library:"
-                        ),
+                    trailing={
                         "sections": [
                             {
                                 "section": hint.section,
@@ -299,16 +298,14 @@ def build_server(config: Config) -> MCPServer:
                             }
                             for hint in top_level_sections(conn, libraryId)
                         ],
+                        "total_tokens": 0,
+                        "total_matches": 0,
+                        "has_more": False,
                     },
                 )
-            rest: dict[str, Any] = {
-                "page": result.page,
-                "total_tokens": result.total_tokens,
-                "total_matches": result.total_matches,
-                "has_more": result.has_more,
-            }
+            message = None
             if not result.snippets:
-                rest["message"] = (
+                message = (
                     f"no fragments on page {result.page}; total_matches: {result.total_matches}"
                 )
             return _doc_payload(
@@ -316,6 +313,9 @@ def build_server(config: Config) -> MCPServer:
                 library_id=libraryId,
                 query=query,
                 selection=selection,
+                context={"page": result.page},
+                missing=missing,
+                message=message,
                 body_key="snippets",
                 body=[
                     {
@@ -326,7 +326,11 @@ def build_server(config: Config) -> MCPServer:
                     }
                     for snippet in result.snippets
                 ],
-                rest=rest,
+                trailing={
+                    "total_tokens": result.total_tokens,
+                    "total_matches": result.total_matches,
+                    "has_more": result.has_more,
+                },
             )
 
     return server
