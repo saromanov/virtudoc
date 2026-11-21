@@ -273,14 +273,20 @@ def test_doctor_warns_on_stale_note(conn, docs_dir, tmp_path):
 
     lib_id = add_library(conn, docs_dir, "demo")
     index_library(conn, lib_id, Chunker())
-    add_note(conn, lib_id, "Use the retry helper for all outbound calls.")
+    add_note(
+        conn,
+        lib_id,
+        "Use the retry helper for all outbound calls.",
+        paths=["api.md"],
+    )
     (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nRetry moved to core.\n")
     index_library(conn, lib_id, Chunker())
 
     result = run_doctor(conn, _doctor_config(tmp_path))
     line = next(line for line in result.lines if "note #1" in line)
     assert "stale" in line
-    assert "source changed" in line
+    assert "anchor_changed" in line
+    assert "api.md" in line
     assert result.problems == 1
 
 
@@ -316,3 +322,24 @@ def test_doctor_git_checks_have_a_timeout(tmp_path, monkeypatch):
     doctor_module._warn_unstable_source(result, "local/demo", source)
     assert result.problems == 0
     assert result.lines == []
+
+
+def test_doctor_reports_removed_symbol_with_commands(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.notes import add_note
+
+    (docs_dir / "api.md").write_text("# API\n\nvalidateSession() here.\n")
+    lib_id = add_library(conn, docs_dir, "demo")
+    index_library(conn, lib_id, Chunker())
+    add_note(conn, lib_id, "Use validateSession().", paths=["api.md"])
+
+    (docs_dir / "api.md").write_text("# API\n\nNothing left.\n")
+    index_library(conn, lib_id, Chunker())
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    line = next(line for line in result.lines if "note #1" in line)
+    assert "symbol_removed: validateSession" in line
+    assert any("edit:" in item for item in result.lines)
+    assert any("reanchor:" in item for item in result.lines)

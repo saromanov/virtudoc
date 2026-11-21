@@ -61,3 +61,6 @@ Thumbs.db
 
 # Project data (never commit local index)
 .virtudoc/
+
+# Benchmark artifact
+bench-results.json

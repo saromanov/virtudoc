@@ -10,7 +10,8 @@ from pathlib import Path
 from .config import Config, data_dir
 from .fetcher import PIN_FILE, read_pinned_branch
 from .indexer.indexer import load_index_failures
-from .notes import source_revision, stale_notes
+from .notes import note_statuses
+from .tokens import estimate_tokens
 from .versions import extract_dep_version, version_status
 
 GIT_TIMEOUT = 10
@@ -99,7 +100,7 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
         SELECT l.*,
                (SELECT COUNT(*) FROM documents d WHERE d.library_id = l.id) AS doc_count,
                (SELECT COUNT(*) FROM chunks c WHERE c.library_id = l.id) AS chunk_count,
-               (SELECT COUNT(*) FROM notes n WHERE n.library_id = l.id) AS note_count
+               (SELECT COUNT(*) FROM notes n WHERE n.library_name = l.name) AS note_count
         FROM libraries l ORDER BY l.id
         """
     ).fetchall()
@@ -119,15 +120,30 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 if len(failures) > 3:
                     shown += f", ... ({len(failures) - 3} more)"
                 result.warn(f"{lib['id']}: files failed to index: {shown}")
-            stale = stale_notes(conn, lib["id"])
-            if stale:
-                current = source_revision(conn, lib["id"])
-                for note in stale:
-                    result.warn(
-                        f"{lib['id']}: note #{note.id} is stale — the source changed "
-                        f"since it was written (note rev {note.source_rev}, current "
-                        f"{current}); review it with 'virtudoc note list {lib['name']}'"
+            notes_for_library = note_statuses(conn, lib["id"])
+            stale = [note for note in notes_for_library if note.status == "stale"]
+            limit = cfg.get_int("notes.max_note_tokens")
+            for note in notes_for_library:
+                tokens = estimate_tokens(note.text)
+                if tokens > limit:
+                    result.info(
+                        f"ℹ {lib['name']}: note #{note.id} is {tokens} tokens "
+                        f"(limit {limit}): split this note"
                     )
+            for note in stale:
+                detail = ", ".join(note.missing_symbols or note.changed_sources[:5])
+                suffix = f": {detail}" if detail else ""
+                result.warn(
+                    f"{lib['name']}: note #{note.id} is stale "
+                    f"({note.stale_reason or 'unknown'}{suffix})"
+                )
+                if note.stale_reason == "symbol_removed":
+                    result.info(
+                        f'  edit:     virtudoc note edit {lib["name"]} {note.id} --text "..."'
+                    )
+                else:
+                    result.info(f"  review:   virtudoc note review {lib['name']} {note.id}")
+                result.info(f"  reanchor: virtudoc note review {lib['name']} {note.id} --reanchor")
             _warn_unstable_source(result, lib["id"], source)
         else:
             result.warn(f"{lib['id']}: source directory missing: {source}")

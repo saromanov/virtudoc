@@ -171,6 +171,18 @@ Fragments mode returns:
   "library_id": "local/mylib",
   "query": "authenticate request",
   "page": 1,
+  "coverage": "full",
+  "missing_identifiers": ["issueLegacyToken"],
+  "notes_warning": "1 team note(s) may be outdated: ...",
+  "notes": [
+    {
+      "id": 1,
+      "text": "...",
+      "status": "stale",
+      "stale_reason": "symbol_removed",
+      "missing_symbols": ["issueLegacyToken"]
+    }
+  ],
   "snippets": [
     {
       "heading_path": "API -> Authentication",
@@ -179,12 +191,18 @@ Fragments mode returns:
       "score": 2.41
     }
   ],
-  "notes": [{ "id": 1, "text": "...", "created_at": "..." }],
   "total_tokens": 420,
   "total_matches": 57,
   "has_more": true
 }
 ```
+
+- `coverage` is `full`, `partial` or `none`: how much of the query the
+  returned fragments answer. `missing_identifiers` lists query identifiers
+  the docs never mention; notes mentioning them carry `mentions_missing`.
+- Team notes carry `status` (`current`/`stale`/`unknown`), `stale_reason`
+  and anchors. `notes_warning` appears when any note is stale. See
+  [Project notes](notes.md).
 
 - `total_matches` is the number of ranked matches for the query and does
   not depend on the page. `has_more` tells whether `page + 1` has

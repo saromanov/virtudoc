@@ -8,10 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from ..coverage import rebuild_library_symbols
 from ..db import (
     delete_document_chunks,
     delete_library_chunks_fts,
     insert_chunk,
+    refresh_source_fingerprint,
     utc_now,
 )
 from ..logging_setup import get_logger
@@ -242,9 +244,32 @@ def add_library(
 
 def delete_library(conn: sqlite3.Connection, name: str) -> None:
     try:
-        lib_id = get_library(conn, name)["id"]
+        lib = get_library(conn, name)
     except LibraryNotFoundError:
-        lib_id = name if name.startswith("local/") else library_id(name)
+        lib = conn.execute(
+            "SELECT * FROM libraries WHERE id = ?",
+            (name if name.startswith("local/") else library_id(name),),
+        ).fetchone()
+    if lib is None:
+        return
+    lib_id = lib["id"]
+    # Notes belong to the logical library: removing one variant keeps them,
+    # re-pointing the origin at a remaining variant. Only the last variant
+    # takes the notes with it (via the notes.library_id foreign key).
+    remaining = conn.execute(
+        "SELECT id FROM libraries WHERE name = ? AND id <> ? ORDER BY id LIMIT 1",
+        (lib["name"], lib_id),
+    ).fetchone()
+    if remaining is not None:
+        conn.execute(
+            "UPDATE notes SET library_id = ? WHERE library_id = ?", (remaining["id"], lib_id)
+        )
+        conn.execute(
+            "UPDATE notes SET origin_library_id = ? WHERE origin_library_id = ?",
+            (remaining["id"], lib_id),
+        )
+    conn.execute("DELETE FROM note_anchors WHERE library_id = ?", (lib_id,))
+    conn.execute("DELETE FROM library_symbols WHERE library_id = ?", (lib_id,))
     delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.execute("DELETE FROM meta WHERE key = ?", (_failure_key(lib_id),))
@@ -387,6 +412,8 @@ def _index_library(
 
     failures &= seen
     _store_index_failures(conn, lib_id, failures)
+    rebuild_library_symbols(conn, lib_id)
+    refresh_source_fingerprint(conn, lib_id)
     conn.execute("UPDATE libraries SET updated_at = ? WHERE id = ?", (utc_now(), lib_id))
     return stats
 
@@ -439,11 +466,13 @@ def add_and_index_library(
 def _clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
     delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM documents WHERE library_id = ?", (lib_id,))
+    conn.execute("DELETE FROM library_symbols WHERE library_id = ?", (lib_id,))
 
 
 def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
     """Drop every indexed document of a library, keeping registration and notes."""
     _clear_library_index(conn, lib_id)
+    refresh_source_fingerprint(conn, lib_id)
     conn.commit()
 
 

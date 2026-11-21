@@ -18,7 +18,14 @@ DEFAULTS: dict[str, dict[str, object]] = {
     "chunk": {"target_tokens": 600, "max_tokens": 1200, "overlap_tokens": 60},
     "index": {"auto_refresh": True},
     "search": {"default_tokens": 5000, "max_results": 20, "snippet_window_tokens": 400},
-    "notes": {"max_tokens": 800},
+    "notes": {
+        "max_tokens": 800,
+        "max_note_tokens": 300,
+        "auto_anchor_k": 3,
+        "auto_anchor_ratio": 0.5,
+        "pinned_max_tokens": 400,
+        "max_symbols": 10,
+    },
     "server": {
         "transport": "stdio",
         "http_host": "127.0.0.1",
@@ -70,6 +77,9 @@ class Config:
 
     def get_int(self, key: str) -> int:
         return int(self.get(key))
+
+    def get_float(self, key: str) -> float:
+        return float(self.get(key))
 
     def get_str(self, key: str) -> str:
         return str(self.get(key))

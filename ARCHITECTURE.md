@@ -104,13 +104,26 @@ the matching id when one exists.
 | `documents` | Indexed files | `library_id`, `rel_path`, `content_hash`, `indexed_at` |
 | `chunks` | Unit of retrieval | `heading_path`, `ord`, `text`, `token_est`, `code_ratio`, `lang` |
 | `chunks_fts` | Virtual FTS5 table | `text` (external content of `chunks`), linked by `rowid` |
-| `notes` | Project notes (KF-03, M3) | `library_id`, `text`, `created_at`, `source_rev` |
+| `notes` | Project notes (KF-03, M3) | `library_id`, `library_name`, `origin_library_id`, `version`, `text`, `created_at`, `source_rev`, `pinned`, `reviewed_at`, `anchor_kind` |
+| `note_anchors` | Documents a note relies on | `note_id`, `library_id`, `rel_path`, `content_hash`, `anchored_at` |
+| `note_symbols` | Identifiers a note relies on | `note_id`, `symbol`, `anchored_at` |
+| `library_symbols` | Identifier lookup per variant | `library_id`, `symbol` (lower-cased plain, exact qualified) |
 | `project_links` | Manifest links (KF-04, M3) | `manifest_path`, `dep_version` |
 | `meta` | Schema version | `key`, `value` |
 
-`notes.source_rev` is a short fingerprint of the indexed documents (paths +
-content hashes) taken when the note was written; `doctor` compares it with the
-current fingerprint and flags stale notes.
+Notes belong to the logical library (`notes.library_name`), so each variant
+sees them; `notes.scope_version` restricts a note to one variant.
+`notes.anchor_kind` is `documents`, `symbols`, `library` or `none`;
+`note_anchors` stores the content hashes a note was confirmed against and
+`note_symbols` the identifiers found in the docs at anchor time. Symbol
+anchors are checked against every served variant, which makes them the
+cross-version signal (`symbol_removed`). `coverage.py` extracts identifiers
+and answers whether the docs mention one; `library_symbols` is rebuilt by the
+indexer and turns those checks into a primary-key lookup.
+`notes.source_rev` fingerprints the whole variant and stays as the baseline
+for library-level anchors. Agents get `current`/`stale`/`unknown` per note,
+plus `notes_warning` when an anchor changed. `libraries.source_fingerprint`
+caches the fingerprint, recomputed by the indexer after every pass.
 
 The `heading_path` field is the single source of truth for the topic boost
 and the outline mode (KF-05). `code_ratio` supports the code-share control
@@ -130,6 +143,10 @@ annotated code block in the chunk and feeds the `language` boost of
 | `chunk.target_tokens` / `max_tokens` / `overlap_tokens` | 600 / 1200 / 60 | Chunker budgets |
 | `search.default_tokens` / `max_results` | 5000 / 20 | Output budget and limit |
 | `notes.max_tokens` | 800 | Notes block budget (M3) |
+| `notes.max_note_tokens` | 300 | Reject longer note text at `note add`/`edit` |
+| `notes.auto_anchor_k` / `auto_anchor_ratio` | 3 / 0.5 | Documents auto-anchored from the note text |
+| `notes.pinned_max_tokens` | 400 | Budget for pinned notes in a response |
+| `notes.max_symbols` | 10 | Symbol anchors extracted from one note |
 | `server.transport` / `http_host` / `http_port` | stdio / 127.0.0.1 / 8765 | MCP transport (M2) |
 | `log.level` | INFO | Log at `~/.virtudoc/virtudoc.log` |
 

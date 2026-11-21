@@ -29,7 +29,7 @@ def test_schema_created(conn):
         "meta",
     } <= tables
     version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "5"
+    assert version == "6"
 
 
 _V1_SCHEMA = """
@@ -79,9 +79,9 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     migrated = open_db(path)
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
     assert "lang" in columns
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 6
     version = migrated.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "5"
+    assert version == "6"
     migrated.close()
 
     fresh = open_db(path)
@@ -348,7 +348,7 @@ def test_init_schema_does_not_write_when_schema_is_current(tmp_path):
     connection.execute("PRAGMA query_only=ON")
     init_schema(connection)  # must not attempt any write
     row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-    assert row[0] == "5"
+    assert row[0] == "6"
 
 
 def test_init_schema_recreates_a_missing_table(tmp_path):
@@ -367,3 +367,68 @@ def test_require_sqlite_rejects_old_versions():
     require_sqlite((3, 46, 1))
     with pytest.raises(UnsupportedSQLiteError, match=r"SQLite 3\.35"):
         require_sqlite((3, 34, 9))
+
+
+def test_migrates_v5_db_to_note_anchors(tmp_path):
+    import hashlib
+    import sqlite3
+
+    from virtudoc.notes import note_statuses
+
+    fingerprint = hashlib.sha256(b"api.md\x00hash-1\x00").hexdigest()[:12]
+    path = tmp_path / "v5.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(
+        f"""
+        CREATE TABLE libraries (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, source_path TEXT NOT NULL,
+            description TEXT, version TEXT, channel TEXT NOT NULL DEFAULT 'release',
+            added_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY, library_id TEXT NOT NULL, rel_path TEXT NOT NULL,
+            title TEXT, content_hash TEXT NOT NULL, indexed_at TEXT NOT NULL,
+            UNIQUE (library_id, rel_path)
+        );
+        CREATE TABLE notes (
+            id INTEGER PRIMARY KEY, library_id TEXT NOT NULL, text TEXT NOT NULL,
+            created_at TEXT NOT NULL, source_rev TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO libraries VALUES
+            ('local/demo', 'demo', '/tmp/docs', NULL, NULL, 'release', 'now', 'now');
+        INSERT INTO documents VALUES (1, 'local/demo', 'api.md', 'API', 'hash-1', 'now');
+        INSERT INTO notes (library_id, text, created_at, source_rev) VALUES
+            ('local/demo', 'Fresh convention.', 'now', '{fingerprint}'),
+            ('local/demo', 'Old convention.', 'now', 'deadbeef0000'),
+            ('local/demo', 'Legacy convention.', 'now', '');
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = open_db(path)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"note_anchors", "note_symbols"} <= tables
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(notes)")}
+    assert {
+        "library_name",
+        "origin_library_id",
+        "scope_version",
+        "pinned",
+        "reviewed_at",
+        "anchor_kind",
+    } <= columns
+
+    statuses = {note.text: note for note in note_statuses(conn, "local/demo")}
+    assert statuses["Fresh convention."].status == "current"
+    assert statuses["Fresh convention."].library_name == "demo"
+    assert statuses["Old convention."].status == "stale"
+    assert statuses["Old convention."].stale_reason == "library_changed"
+    assert statuses["Legacy convention."].status == "unknown"
+    assert statuses["Legacy convention."].anchor_kind == "none"
+
+    fingerprint_row = conn.execute(
+        "SELECT source_fingerprint FROM libraries WHERE id = 'local/demo'"
+    ).fetchone()
+    assert fingerprint_row[0] == fingerprint
+    conn.close()

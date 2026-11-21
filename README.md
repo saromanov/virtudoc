@@ -66,6 +66,9 @@ virtudoc remove mylib
 
 # Attach a team convention note to a library (agents receive it with docs)
 virtudoc note add mylib --text "Use the retry helper for all outbound calls."
+virtudoc note add mylib --text "Retries are capped at 3." --path api/retry.md
+virtudoc note list mylib      # status, anchors, review date
+virtudoc note review mylib 3  # confirm after reviewing an anchor change
 
 # Warn when the indexed docs version diverges from the project dependency
 virtudoc link mylib --project /path/to/consuming/project
@@ -147,8 +150,17 @@ default environment, so the data directory is `~/.virtudoc` — set
   pagination; `page=N+1` continues the ranking. `section` restricts the
   answer to a heading branch and takes a path, e.g.
   `"Guide → Authentication"` or a top-level branch name (`"Guide"`) — a
-  bare leaf name alone does not match. Relevant project notes are
-  included before the fragments. Empty results state that the index does
+  bare leaf name alone does not match. Project notes are included before
+  the fragments: each note carries `status` (`current`/`stale`/`unknown`),
+  `stale_reason`, `changed_sources` and `reviewed_at`, and a
+  `notes_warning` appears when any note relies on changed documentation.
+  Identifiers from the query that the docs never mention are listed in
+  `missing_identifiers`; notes mentioning them carry `mentions_missing`,
+  and a note whose symbol anchor disappeared is stale with `symbol_removed`.
+  `coverage` reports `full`, `partial` or `none` for how much of the query
+  the returned fragments answer.
+  Pinned notes are always included; notes that do not fit are counted in
+  `notes_omitted` and never truncated. Empty results state that the index does
   not cover the query, tell the agent not to answer from memory, and
   return the library's top-level sections to help rephrase the query.
 
@@ -234,6 +246,9 @@ pip install -e '.[dev]'
 pytest
 ruff check virtudoc tests
 ruff format virtudoc tests
+
+# Notes overhead benchmark (writes bench-results.json)
+pytest -m bench tests/bench -q -s
 ```
 
 ## Status
