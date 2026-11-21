@@ -32,6 +32,21 @@ convention — in one response, before any code is written.
 
 ## Keeping notes healthy
 
-Notes age. Use `note list` to review them periodically, `note remove` to
-delete stale ones, and `virtudoc doctor` to spot libraries accumulating
-many notes.
+Notes age. Each note records the revision of the indexed source it was
+written against — a short fingerprint of the indexed files and their content
+hashes, so it works for non-git sources too. `note list` prints it next to
+the note.
+
+When the documentation changes, the note no longer describes the same
+source. `virtudoc doctor` reports it:
+
+```
+  WARN local/mylib: note #3 is stale — the source changed since it was
+       written (note rev 4f2a91c8d0ab, current 9b7e3d1f5c22);
+       review it with 'virtudoc note list mylib'
+```
+
+Review the note, then either remove it or re-add it: a new note captures
+the current revision and is fresh again. Notes written before revision
+tracking have no revision recorded and are not reported. `doctor` exits
+with code `1` while stale notes remain, so CI can gate on it.

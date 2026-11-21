@@ -2,7 +2,14 @@ import pytest
 
 from virtudoc.indexer.chunker import Chunker
 from virtudoc.indexer.indexer import add_library, index_library
-from virtudoc.notes import add_note, list_notes, relevant_notes, remove_note
+from virtudoc.notes import (
+    add_note,
+    list_notes,
+    relevant_notes,
+    remove_note,
+    source_revision,
+    stale_notes,
+)
 
 
 @pytest.fixture
@@ -94,3 +101,51 @@ def test_relevant_notes_never_exceed_budget(conn, lib):
     notes = relevant_notes(conn, lib, "middleware", budget_tokens=120)
     assert notes
     assert sum(estimate_tokens(note.text) for note in notes) <= 120
+
+
+def test_add_note_records_source_revision(conn, lib):
+    add_note(conn, lib, "Team convention.")
+    note = list_notes(conn, lib)[0]
+    revision = source_revision(conn, lib)
+    assert note.source_rev == revision
+    assert len(revision) == 12
+
+
+def test_source_revision_ignores_reindex_without_changes(conn, lib):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import index_library
+
+    before = source_revision(conn, lib)
+    index_library(conn, lib, Chunker())
+    assert source_revision(conn, lib) == before
+
+
+def test_stale_notes_flagged_after_source_changes(conn, lib, docs_dir):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import index_library
+
+    add_note(conn, lib, "Use the retry helper for all outbound calls.")
+    assert stale_notes(conn, lib) == []
+
+    (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nRetry moved to core.\n")
+    index_library(conn, lib, Chunker())
+
+    stale = stale_notes(conn, lib)
+    assert [note.text for note in stale] == ["Use the retry helper for all outbound calls."]
+
+
+def test_note_added_after_change_is_fresh(conn, lib, docs_dir):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import index_library
+
+    add_note(conn, lib, "Old convention.")
+    (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nRetry moved to core.\n")
+    index_library(conn, lib, Chunker())
+    add_note(conn, lib, "New convention.")
+
+    assert [note.text for note in stale_notes(conn, lib)] == ["Old convention."]
+
+
+def test_stale_notes_skips_notes_without_revision(conn, lib):
+    add_note(conn, lib, "Legacy note.", source_rev="")
+    assert stale_notes(conn, lib) == []

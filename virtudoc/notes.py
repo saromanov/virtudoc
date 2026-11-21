@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 
@@ -24,13 +25,38 @@ class Note:
     id: int
     text: str
     created_at: str
+    source_rev: str = ""
     score: int = 0
 
 
-def add_note(conn: sqlite3.Connection, library_id: str, text: str) -> int:
+def source_revision(conn: sqlite3.Connection, library_id: str) -> str:
+    """Fingerprint of the indexed source: the docs an agent reads right now.
+
+    Built from the paths and content hashes of the indexed documents, so it
+    works for non-git sources too and never depends on the working tree state.
+    """
+    rows = conn.execute(
+        "SELECT rel_path, content_hash FROM documents WHERE library_id = ? ORDER BY rel_path",
+        (library_id,),
+    ).fetchall()
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(row["rel_path"].encode("utf-8", "surrogatepass"))
+        digest.update(b"\x00")
+        digest.update(row["content_hash"].encode("utf-8", "surrogatepass"))
+        digest.update(b"\x00")
+    return digest.hexdigest()[:12]
+
+
+def add_note(
+    conn: sqlite3.Connection, library_id: str, text: str, source_rev: str | None = None
+) -> int:
+    """Attach a note, recording the source revision it was written against."""
+    if source_rev is None:
+        source_rev = source_revision(conn, library_id)
     cur = conn.execute(
-        "INSERT INTO notes (library_id, text, created_at) VALUES (?, ?, ?)",
-        (library_id, text.strip(), utc_now()),
+        "INSERT INTO notes (library_id, text, created_at, source_rev) VALUES (?, ?, ?, ?)",
+        (library_id, text.strip(), utc_now(), source_rev),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -38,10 +64,32 @@ def add_note(conn: sqlite3.Connection, library_id: str, text: str) -> int:
 
 def list_notes(conn: sqlite3.Connection, library_id: str) -> list[Note]:
     rows = conn.execute(
-        "SELECT id, text, created_at FROM notes WHERE library_id = ? ORDER BY id",
+        "SELECT id, text, created_at, source_rev FROM notes WHERE library_id = ? ORDER BY id",
         (library_id,),
     ).fetchall()
-    return [Note(id=row["id"], text=row["text"], created_at=row["created_at"]) for row in rows]
+    return [
+        Note(
+            id=row["id"],
+            text=row["text"],
+            created_at=row["created_at"],
+            source_rev=row["source_rev"],
+        )
+        for row in rows
+    ]
+
+
+def stale_notes(conn: sqlite3.Connection, library_id: str) -> list[Note]:
+    """Notes written against a different revision of the indexed source.
+
+    Notes without a recorded revision (written before v4) are skipped: their
+    staleness cannot be determined.
+    """
+    current = source_revision(conn, library_id)
+    return [
+        note
+        for note in list_notes(conn, library_id)
+        if note.source_rev and note.source_rev != current
+    ]
 
 
 def remove_note(conn: sqlite3.Connection, library_id: str, note_id: int) -> bool:

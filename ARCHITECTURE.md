@@ -93,9 +93,13 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
 | `documents` | Indexed files | `library_id`, `rel_path`, `content_hash`, `indexed_at` |
 | `chunks` | Unit of retrieval | `heading_path`, `ord`, `text`, `token_est`, `code_ratio`, `lang` |
 | `chunks_fts` | Virtual FTS5 table | `text` (external content of `chunks`), linked by `rowid` |
-| `notes` | Project notes (KF-03, M3) | `library_id`, `text`, `created_at` |
+| `notes` | Project notes (KF-03, M3) | `library_id`, `text`, `created_at`, `source_rev` |
 | `project_links` | Manifest links (KF-04, M3) | `manifest_path`, `dep_version` |
 | `meta` | Schema version | `key`, `value` |
+
+`notes.source_rev` is a short fingerprint of the indexed documents (paths +
+content hashes) taken when the note was written; `doctor` compares it with the
+current fingerprint and flags stale notes.
 
 The `heading_path` field is the single source of truth for the topic boost
 and the outline mode (KF-05). `code_ratio` supports the code-share control

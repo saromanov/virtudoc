@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # RETURNING needs 3.35, the trigram tokenizer needs 3.34.
 MIN_SQLITE_VERSION = (3, 35, 0)
@@ -136,7 +136,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY,
             library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
             text TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            source_rev TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS project_links (
@@ -156,6 +157,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
     if columns and "lang" not in columns:
         conn.execute("ALTER TABLE chunks ADD COLUMN lang TEXT NOT NULL DEFAULT ''")
+    note_columns = {row[1] for row in conn.execute("PRAGMA table_info(notes)")}
+    if note_columns and "source_rev" not in note_columns:
+        # Notes written before v4 have no recorded revision; staleness is
+        # unknown for them, so doctor leaves them alone.
+        conn.execute("ALTER TABLE notes ADD COLUMN source_rev TEXT NOT NULL DEFAULT ''")
     if not fts_existed:
         # the FTS table was just recreated — restore pre-v3 rows
         _backfill_fts(conn, "chunks_fts")

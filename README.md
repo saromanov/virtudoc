@@ -63,7 +63,7 @@ virtudoc note add mylib --text "Use the retry helper for all outbound calls."
 
 # Warn when the indexed docs version diverges from the project dependency
 virtudoc link mylib --project /path/to/consuming/project
-virtudoc doctor   # config, sources, index integrity, version drift summary
+virtudoc doctor   # config, sources, index integrity, version drift, stale notes
 
 # Zero-config onboarding: scan the project's manifests and match libraries
 virtudoc init .              # report only; add --link to create the links
