@@ -62,8 +62,9 @@ in which the database returns them.
 - Names of classes, functions and error types are ideal tokens.
 - When unsure about the structure, ask for `mode="outline"` first, then
   narrow with `section`.
-- If the response has no snippets, it contains the library's top-level
-  sections — rephrase using their terminology.
+- If the response has no snippets, do not answer from memory: it states
+  that the index does not cover the query and lists the library's
+  top-level sections — rephrase using their terminology.
 
 ## What is searched
 

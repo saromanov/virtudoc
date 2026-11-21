@@ -138,8 +138,9 @@ default environment, so the data directory is `~/.virtudoc` — set
   answer to a heading branch and takes a path, e.g.
   `"Guide → Authentication"` or a top-level branch name (`"Guide"`) — a
   bare leaf name alone does not match. Relevant project notes are
-  included before the fragments. Empty results return the library's
-  top-level sections to help rephrase the query.
+  included before the fragments. Empty results state that the index does
+  not cover the query, tell the agent not to answer from memory, and
+  return the library's top-level sections to help rephrase the query.
 
 Optionally expose the server over streamable HTTP on 127.0.0.1 for clients
 without stdio support: `virtudoc serve --http [port]` (default port 8765).
