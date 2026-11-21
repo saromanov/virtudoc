@@ -76,11 +76,13 @@ def test_relevant_notes_empty_query(conn, lib):
     assert relevant_notes(conn, lib, " ,, ") == []
 
 
-def test_relevant_notes_truncates_oversized_first_note(conn, lib):
+def test_relevant_notes_skip_oversized_note(conn, lib):
+    from virtudoc.notes import select_notes
+
     add_note(conn, lib, "middleware " * 500)
-    notes = relevant_notes(conn, lib, "middleware", budget_tokens=60)
-    assert len(notes) == 1
-    assert notes[0].text.endswith("…")
+    selection = select_notes(conn, lib, "middleware", budget_tokens=60)
+    assert selection.notes == []
+    assert selection.omitted == 1
 
 
 def test_relevant_notes_match_whole_words_not_substrings(conn, lib):
@@ -98,9 +100,9 @@ def test_relevant_notes_never_exceed_budget(conn, lib):
 
     for index in range(5):
         add_note(conn, lib, f"middleware note {index}: " + "detail " * 80)
-    notes = relevant_notes(conn, lib, "middleware", budget_tokens=120)
+    notes = relevant_notes(conn, lib, "middleware", budget_tokens=300)
     assert notes
-    assert sum(estimate_tokens(note.text) for note in notes) <= 120
+    assert sum(estimate_tokens(note.text) for note in notes) <= 300
 
 
 def test_add_note_records_source_revision(conn, lib):
@@ -124,7 +126,7 @@ def test_stale_notes_flagged_after_source_changes(conn, lib, docs_dir):
     from virtudoc.indexer.chunker import Chunker
     from virtudoc.indexer.indexer import index_library
 
-    add_note(conn, lib, "Use the retry helper for all outbound calls.")
+    add_note(conn, lib, "Use the retry helper for all outbound calls.", paths=["api.md"])
     assert stale_notes(conn, lib) == []
 
     (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nRetry moved to core.\n")
@@ -132,16 +134,18 @@ def test_stale_notes_flagged_after_source_changes(conn, lib, docs_dir):
 
     stale = stale_notes(conn, lib)
     assert [note.text for note in stale] == ["Use the retry helper for all outbound calls."]
+    assert stale[0].stale_reason == "anchor_changed"
+    assert stale[0].changed_sources == ["api.md"]
 
 
 def test_note_added_after_change_is_fresh(conn, lib, docs_dir):
     from virtudoc.indexer.chunker import Chunker
     from virtudoc.indexer.indexer import index_library
 
-    add_note(conn, lib, "Old convention.")
+    add_note(conn, lib, "Old convention.", paths=["api.md"])
     (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nRetry moved to core.\n")
     index_library(conn, lib, Chunker())
-    add_note(conn, lib, "New convention.")
+    add_note(conn, lib, "New convention.", paths=["api.md"])
 
     assert [note.text for note in stale_notes(conn, lib)] == ["Old convention."]
 

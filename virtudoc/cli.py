@@ -25,9 +25,22 @@ from .indexer.indexer import (
     update_all,
 )
 from .logging_setup import setup_logging
-from .notes import add_note, list_notes, relevant_notes, remove_note, source_revision
+from .notes import (
+    ANCHOR_LIBRARY,
+    ANCHOR_NONE,
+    add_note,
+    edit_note,
+    note_anchors,
+    note_statuses,
+    pinned_tokens,
+    relevant_notes,
+    remove_note,
+    review_note,
+    set_pinned,
+)
 from .onboarding import format_report, link_matches, scan_project
 from .search.engine import library_outline, search
+from .tokens import estimate_tokens
 from .versions import MANIFEST_CANDIDATES, link_library, unlink_library
 
 
@@ -225,6 +238,7 @@ def cmd_search(args: argparse.Namespace, cfg: Config) -> int:
                 library_id,
                 args.query,
                 budget_tokens=cfg.get_int("notes.max_tokens"),
+                pinned_budget_tokens=cfg.get_int("notes.pinned_max_tokens"),
             )
     if notes:
         print("=== project notes ===")
@@ -266,39 +280,113 @@ def _print_outline(nodes, indent: int = 0) -> None:
         _print_outline(node.children, indent + 1)
 
 
+def _note_library(conn: sqlite3.Connection, name: str, version: str | None = None):
+    """Resolve the variant a note command operates on."""
+    lib = get_library(conn, name)
+    if version is None:
+        return lib
+    row = conn.execute(
+        "SELECT * FROM libraries WHERE name = ? AND version = ?", (lib["name"], version)
+    ).fetchone()
+    if row is None:
+        raise LibraryNotFoundError(f"library {lib['name']} has no indexed version {version}")
+    return row
+
+
+def _check_note_size(text: str, cfg: Config) -> str | None:
+    limit = cfg.get_int("notes.max_note_tokens")
+    tokens = estimate_tokens(text)
+    if tokens > limit:
+        return (
+            f"note is {tokens} tokens, limit is {limit} "
+            f"(notes.max_note_tokens); split it into several notes"
+        )
+    return None
+
+
 def cmd_note_add(args: argparse.Namespace, cfg: Config) -> int:
+    error = _check_note_size(args.text, cfg)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
     with _open(cfg) as conn:
         try:
-            lib = get_library(conn, args.name)
-        except LibraryNotFoundError as exc:
+            lib = _note_library(conn, args.name, args.version)
+            note_id = add_note(
+                conn,
+                lib["id"],
+                args.text,
+                paths=args.path,
+                version=args.version,
+                pinned=args.pin,
+                no_anchor=args.no_anchor,
+                auto_anchor_k=cfg.get_int("notes.auto_anchor_k"),
+                auto_anchor_ratio=cfg.get_float("notes.auto_anchor_ratio"),
+            )
+            anchors = note_anchors(conn, note_id, lib["id"])
+            row = conn.execute("SELECT anchor_kind FROM notes WHERE id = ?", (note_id,)).fetchone()
+        except (LibraryNotFoundError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        note_id = add_note(conn, lib["id"], args.text)
-        revision = source_revision(conn, lib["id"])
-    print(f"added note #{note_id} to {lib['id']} (source revision {revision})")
+    if row["anchor_kind"] == ANCHOR_NONE:
+        print(f"Note #{note_id} added to {lib['name']} without anchors (status: unknown)")
+    elif row["anchor_kind"] == ANCHOR_LIBRARY:
+        print(
+            f"Note #{note_id} added to {lib['name']}, anchored to the whole library "
+            "(no document matched the note text)"
+        )
+    else:
+        print(f"Note #{note_id} added to {lib['name']}, anchored to:")
+        for anchor in anchors:
+            print(f"  {anchor['rel_path']}")
     return 0
+
+
+def _anchor_summary(note, anchors: list[sqlite3.Row]) -> str:
+    if not anchors:
+        return "—"
+    parts = []
+    for anchor in anchors:
+        suffix = " (chg)" if anchor["rel_path"] in note.changed_sources else ""
+        parts.append(f"{anchor['rel_path']}{suffix}")
+    return ", ".join(parts)
+
+
+def _print_note_table(conn: sqlite3.Connection, lib) -> None:
+    notes = note_statuses(conn, lib["id"])
+    if not notes:
+        print(f"no notes for {lib['id']}")
+        return
+    print(f"{'ID':<4}{'STATUS':<9}{'PIN':<5}{'VERSION':<10}{'REVIEWED':<18}  {'ANCHORS':<24}TEXT")
+    for note in notes:
+        anchors = note_anchors(conn, note.id, lib["id"])
+        reviewed = note.reviewed_at[:16].replace("T", " ") if note.reviewed_at else "—"
+        version = "*" if note.version is None else note.version
+        pin = "★" if note.pinned else "-"
+        text = note.text.replace("\n", " ")
+        if len(text) > 60:
+            text = text[:59] + "…"
+        print(
+            f"{note.id:<4}{note.status:<9}{pin:<5}{version:<10}{reviewed:<18}  "
+            f"{_anchor_summary(note, anchors):<24}{text}"
+        )
 
 
 def cmd_note_list(args: argparse.Namespace, cfg: Config) -> int:
     with _open(cfg) as conn:
         try:
-            lib = get_library(conn, args.name)
+            lib = _note_library(conn, args.name, args.version)
         except LibraryNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        notes = list_notes(conn, lib["id"])
-    if not notes:
-        print(f"no notes for {lib['id']}")
-        return 0
-    for note in notes:
-        print(f"#{note.id}\t{note.created_at}\t{note.source_rev or '-'}\t{note.text}")
+        _print_note_table(conn, lib)
     return 0
 
 
 def cmd_note_remove(args: argparse.Namespace, cfg: Config) -> int:
     with _open(cfg) as conn:
         try:
-            lib = get_library(conn, args.name)
+            lib = _note_library(conn, args.name, args.version)
         except LibraryNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -308,6 +396,118 @@ def cmd_note_remove(args: argparse.Namespace, cfg: Config) -> int:
         return 1
     print(f"removed note #{args.id} from {lib['id']}")
     return 0
+
+
+def cmd_note_review(args: argparse.Namespace, cfg: Config) -> int:
+    if not args.all and args.id is None:
+        print("error: pass a note id or --all", file=sys.stderr)
+        return 1
+    with _open(cfg) as conn:
+        try:
+            lib = _note_library(conn, args.name, args.version)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if args.all:
+            notes = note_statuses(conn, lib["id"])
+            if not notes:
+                print(f"no notes for {lib['id']}")
+                return 0
+            for note in notes:
+                print(f"#{note.id}  {note.status}  {note.text}")
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    print(
+                        "error: refusing to confirm without a terminal; pass --yes", file=sys.stderr
+                    )
+                    return 1
+                answer = input(f"Review all {len(notes)} notes of {lib['name']}? [y/N] ")
+                if answer.strip().lower() not in ("y", "yes"):
+                    print("aborted")
+                    return 0
+            reviewed = 0
+            for note in notes:
+                if review_note(
+                    conn,
+                    lib["id"],
+                    note.id,
+                    reanchor=args.reanchor,
+                    auto_anchor_k=cfg.get_int("notes.auto_anchor_k"),
+                    auto_anchor_ratio=cfg.get_float("notes.auto_anchor_ratio"),
+                ):
+                    reviewed += 1
+            print(f"reviewed {reviewed} note(s) of {lib['name']}")
+            return 0
+        ok = review_note(
+            conn,
+            lib["id"],
+            args.id,
+            reanchor=args.reanchor,
+            auto_anchor_k=cfg.get_int("notes.auto_anchor_k"),
+            auto_anchor_ratio=cfg.get_float("notes.auto_anchor_ratio"),
+        )
+    if not ok:
+        print(f"error: note #{args.id} not found in {lib['name']}", file=sys.stderr)
+        return 1
+    print(f"reviewed note #{args.id} of {lib['name']}")
+    return 0
+
+
+def cmd_note_edit(args: argparse.Namespace, cfg: Config) -> int:
+    error = _check_note_size(args.text, cfg)
+    if error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    with _open(cfg) as conn:
+        try:
+            lib = _note_library(conn, args.name, args.version)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        ok = edit_note(
+            conn,
+            lib["id"],
+            args.id,
+            args.text,
+            auto_anchor_k=cfg.get_int("notes.auto_anchor_k"),
+            auto_anchor_ratio=cfg.get_float("notes.auto_anchor_ratio"),
+        )
+    if not ok:
+        print(f"error: note #{args.id} not found in {lib['name']}", file=sys.stderr)
+        return 1
+    print(f"updated and reviewed note #{args.id} of {lib['name']}")
+    return 0
+
+
+def _set_pin(args: argparse.Namespace, cfg: Config, pinned: bool) -> int:
+    with _open(cfg) as conn:
+        try:
+            lib = _note_library(conn, args.name, args.version)
+        except LibraryNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not set_pinned(conn, lib["id"], args.id, pinned):
+            print(f"error: note #{args.id} not found in {lib['name']}", file=sys.stderr)
+            return 1
+        used = pinned_tokens(conn, lib["id"])
+        limit = cfg.get_int("notes.pinned_max_tokens")
+    verb = "pinned" if pinned else "unpinned"
+    print(f"{verb} note #{args.id} of {lib['name']}")
+    if pinned and used > limit:
+        print(
+            f"warning: pinned notes use {used} tokens, over notes.pinned_max_tokens "
+            f"({limit}); some will be omitted from agent responses",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def cmd_note_pin(args: argparse.Namespace, cfg: Config) -> int:
+    return _set_pin(args, cfg, True)
+
+
+def cmd_note_unpin(args: argparse.Namespace, cfg: Config) -> int:
+    return _set_pin(args, cfg, False)
 
 
 def cmd_link(args: argparse.Namespace, cfg: Config) -> int:
@@ -382,6 +582,9 @@ def cmd_doctor(args: argparse.Namespace, cfg: Config) -> int:
     print("virtudoc doctor")
     for line in result.lines:
         print(line)
+    strict = bool(getattr(args, "strict", False))
+    if strict and any("is stale" in line for line in result.lines):
+        return 1
     return 1 if result.problems else 0
 
 
@@ -595,16 +798,62 @@ def build_parser() -> argparse.ArgumentParser:
     n = note_sub.add_parser("add", help="attach a note to a library")
     n.add_argument("name", help="library name")
     n.add_argument("--text", required=True, help="note text")
+    n.add_argument(
+        "--path",
+        action="append",
+        help="anchor the note to an indexed document path (repeatable)",
+    )
+    n.add_argument("--version", help="show the note only for this library version")
+    n.add_argument(
+        "--no-anchor",
+        action="store_true",
+        help="do not anchor the note (its status stays unknown)",
+    )
+    n.add_argument("--pin", action="store_true", help="send the note with every response")
     n.set_defaults(func=cmd_note_add)
 
     n = note_sub.add_parser("list", help="list notes of a library")
     n.add_argument("name", help="library name")
+    n.add_argument("--version", help="status relative to this library version")
     n.set_defaults(func=cmd_note_list)
 
     n = note_sub.add_parser("remove", help="remove a note from a library")
     n.add_argument("name", help="library name")
     n.add_argument("--id", type=int, required=True, help="note id")
+    n.add_argument("--version", help="library version")
     n.set_defaults(func=cmd_note_remove)
+
+    n = note_sub.add_parser("review", help="confirm a note against the current docs")
+    n.add_argument("name", help="library name")
+    n.add_argument("id", type=int, nargs="?", help="note id")
+    n.add_argument("--all", action="store_true", help="review every note of the library")
+    n.add_argument("--version", help="library version whose docs confirm the note")
+    n.add_argument(
+        "--reanchor",
+        action="store_true",
+        help="recompute anchors from the current documentation",
+    )
+    n.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    n.set_defaults(func=cmd_note_review)
+
+    n = note_sub.add_parser("edit", help="change the note text and review it")
+    n.add_argument("name", help="library name")
+    n.add_argument("id", type=int, help="note id")
+    n.add_argument("--text", required=True, help="new note text")
+    n.add_argument("--version", help="library version")
+    n.set_defaults(func=cmd_note_edit)
+
+    n = note_sub.add_parser("pin", help="send the note with every response")
+    n.add_argument("name", help="library name")
+    n.add_argument("id", type=int, help="note id")
+    n.add_argument("--version", help="library version")
+    n.set_defaults(func=cmd_note_pin)
+
+    n = note_sub.add_parser("unpin", help="stop sending the note with every response")
+    n.add_argument("name", help="library name")
+    n.add_argument("id", type=int, help="note id")
+    n.add_argument("--version", help="library version")
+    n.set_defaults(func=cmd_note_unpin)
 
     p = sub.add_parser("link", help="link a library to a project dependency manifest")
     p.add_argument("name", help="library name")
@@ -616,6 +865,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_unlink)
 
     p = sub.add_parser("doctor", help="check configuration, sources, index integrity")
+    p.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 when stale notes exist (for CI and pre-commit)",
+    )
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser(

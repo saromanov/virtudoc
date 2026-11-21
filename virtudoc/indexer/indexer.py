@@ -12,6 +12,7 @@ from ..db import (
     delete_document_chunks,
     delete_library_chunks_fts,
     insert_chunk,
+    refresh_source_fingerprint,
     utc_now,
 )
 from ..logging_setup import get_logger
@@ -387,6 +388,7 @@ def _index_library(
 
     failures &= seen
     _store_index_failures(conn, lib_id, failures)
+    refresh_source_fingerprint(conn, lib_id)
     conn.execute("UPDATE libraries SET updated_at = ? WHERE id = ?", (utc_now(), lib_id))
     return stats
 
@@ -444,6 +446,7 @@ def _clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
 def clear_library_index(conn: sqlite3.Connection, lib_id: str) -> None:
     """Drop every indexed document of a library, keeping registration and notes."""
     _clear_library_index(conn, lib_id)
+    refresh_source_fingerprint(conn, lib_id)
     conn.commit()
 
 

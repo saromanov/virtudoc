@@ -808,3 +808,58 @@ def test_run_serve_stdio_transport(home, monkeypatch):
 
     assert mcp_server_module.run_serve(Config()) == 0
     assert started["stdio"] is True
+
+
+@pytest.mark.anyio
+async def test_get_library_docs_reports_stale_notes_first(home_index):
+    from virtudoc.notes import add_note
+
+    with open_db(Config().db_path) as conn:
+        library = conn.execute("SELECT id, source_path FROM libraries").fetchone()
+        add_note(conn, library["id"], "Use the retry helper.", paths=["api.md"])
+
+    (Path(library["source_path"]) / "api.md").write_text(
+        "# API Reference\n\n## Retry\n\nRetry moved to core.\n"
+    )
+    _run_cli(home_index, "update")
+
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": library["id"], "query": "retry helper"},
+            )
+    payload = _payload(result)
+    keys = list(payload)
+    assert "notes_warning" in payload
+    assert keys.index("notes_warning") < keys.index("notes") < keys.index("snippets")
+    note = payload["notes"][0]
+    assert note["status"] == "stale"
+    assert note["stale_reason"] == "anchor_changed"
+    assert note["changed_sources"] == ["api.md"]
+
+
+@pytest.mark.anyio
+async def test_get_library_docs_omits_notes_instead_of_truncating(home_index):
+    from virtudoc.notes import add_note
+
+    with open_db(Config().db_path) as conn:
+        library = conn.execute("SELECT id FROM libraries").fetchone()
+        add_note(
+            conn,
+            library["id"],
+            "Middleware convention: " + "detail " * 2000,
+            no_anchor=True,
+        )
+
+    async with stdio_client(_server_params(home_index)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get-library-docs",
+                {"libraryId": library["id"], "query": "middleware"},
+            )
+    payload = _payload(result)
+    assert payload["notes"] == []
+    assert payload["notes_omitted"] == 1

@@ -92,15 +92,23 @@ in both modes.
 ## note — project notes
 
 ```bash
-virtudoc note add <name> --text "Convention or gotcha"
+virtudoc note add <name> --text "Convention or gotcha" [--path <rel_path>] \
+    [--version V] [--pin] [--no-anchor]
 virtudoc note list <name>
+virtudoc note review <name> <id> [--version V] [--reanchor]
+virtudoc note review <name> --all [--version V] [--yes]
+virtudoc note edit <name> <id> --text "..."
+virtudoc note pin <name> <id>
+virtudoc note unpin <name> <id>
 virtudoc note remove <name> --id N
 ```
 
-Notes are attached to a library, survive reindexing and are delivered to
-agents together with documentation. Each note records the source revision
-it was written against; `note list` shows it and `doctor` flags notes left
-behind by later documentation changes. See [Project notes](notes.md).
+Notes are attached to a logical library, survive reindexing and are delivered
+to agents together with documentation. Each note is anchored to the documents
+it relies on; agents receive `current`/`stale`/`unknown` status with every
+note and a `notes_warning` when any note may be outdated. `note list` shows
+status, pin, version, review date and anchors; `doctor` flags stale notes with
+the reason and the review command. See [Project notes](notes.md).
 
 ## init — project onboarding
 

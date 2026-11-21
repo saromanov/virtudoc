@@ -425,7 +425,8 @@ def test_note_list_output(home, docs_dir, capsys):
     capsys.readouterr()
     assert main(["note", "list", "demo"]) == 0
     out = capsys.readouterr().out
-    assert "#1\t" in out
+    assert "STATUS" in out
+    assert "1   current" in out
     assert "Convention note." in out
 
 
@@ -599,3 +600,77 @@ def test_cli_reports_unsupported_sqlite(home, capsys, monkeypatch):
     monkeypatch.setattr("virtudoc.cli.open_db", broken)
     assert main(["list"]) == 1
     assert "SQLite 3.35+ is required" in capsys.readouterr().err
+
+
+def test_note_add_with_anchors_and_review_flow(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "add", "demo", "--text", "Use the retry helper.", "--path", "api.md"]) == 0
+    out = capsys.readouterr().out
+    assert "Note #1 added to demo, anchored to:" in out
+    assert "api.md" in out
+
+    (docs_dir / "api.md").write_text("# API Reference\n\n## Retry\n\nMoved.\n")
+    assert main(["update"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "list", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "stale" in out
+    assert "api.md (chg)" in out
+
+    assert main(["note", "review", "demo", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "reviewed note #1" in out
+
+    assert main(["note", "list", "demo"]) == 0
+    assert "current" in capsys.readouterr().out
+
+
+def test_note_add_rejects_unknown_anchor(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "add", "demo", "--text", "Note.", "--path", "guide.mdx"]) == 1
+    err = capsys.readouterr().err
+    assert "closest: guide.md" in err
+
+
+def test_note_add_rejects_oversized_text(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    capsys.readouterr()
+
+    text = "middleware " * 300
+    assert main(["note", "add", "demo", "--text", text]) == 1
+    err = capsys.readouterr().err
+    assert "notes.max_note_tokens" in err
+    assert "split it into several notes" in err
+
+
+def test_note_edit_pin_and_unpin(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    assert main(["note", "add", "demo", "--text", "Old text."]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "pin", "demo", "1"]) == 0
+    assert "pinned note #1" in capsys.readouterr().out
+    assert main(["note", "list", "demo"]) == 0
+    assert "★" in capsys.readouterr().out
+
+    assert main(["note", "edit", "demo", "1", "--text", "New text."]) == 0
+    assert "updated and reviewed note #1" in capsys.readouterr().out
+
+    assert main(["note", "unpin", "demo", "1"]) == 0
+    assert "unpinned note #1" in capsys.readouterr().out
+
+
+def test_note_review_all_requires_yes(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    assert main(["note", "add", "demo", "--text", "First."]) == 0
+    assert main(["note", "add", "demo", "--text", "Second."]) == 0
+    capsys.readouterr()
+
+    assert main(["note", "review", "demo", "--all", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "reviewed 2 note(s) of demo" in out

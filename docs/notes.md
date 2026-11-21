@@ -2,51 +2,98 @@
 
 Documentation answers "how does the API work". Project notes answer "how
 do **we** do it": conventions, decisions, gotchas, forbidden modules,
-workaround rationales. VirtuDoc attaches such notes to a library and
+workaround rationales. VirtuDoc attaches such notes to a logical library and
 delivers them to agents together with the documentation.
 
 ## Managing notes
 
 ```bash
 virtudoc note add mylib --text "Always use the retry helper for outbound calls."
+virtudoc note add mylib --text "Retries are capped at 3." --path api/retry.md
+virtudoc note add mylib --text "Never call the legacy client." --pin
+virtudoc note add mylib --text "Auth v1 is gone in 2.0." --version 2.0
 virtudoc note list mylib
+virtudoc note edit mylib 3 --text "Retries are capped at 5."
+virtudoc note review mylib 3
+virtudoc note review mylib --all --yes
+virtudoc note pin mylib 9
+virtudoc note unpin mylib 9
 virtudoc note remove mylib --id 3
 ```
 
-- Notes are attached to a library and survive reindexing.
-- They are removed together with the library.
-- Each note shows its creation date in the output.
+- Notes belong to the **logical library** (`mylib`), so every indexed version
+  and branch sees them. `--version V` limits a note to one variant.
+- `--pin` sends a note with every response, regardless of the query.
+- Notes survive reindexing and are removed together with the library.
+- Note text over `notes.max_note_tokens` (default 300) is rejected: a long
+  note must be split, because rules are never truncated in responses.
+
+## Anchors and status
+
+Each note is anchored to the documents it relies on:
+
+- explicit `--path` anchors (validated against the index, with closest-path
+  hints on typos);
+- otherwise the note text is searched in the variant and the top distinct
+  documents become anchors (`notes.auto_anchor_k`, default 3; a document must
+  score at least `notes.auto_anchor_ratio` = 0.5 of the best score);
+- `--no-anchor` creates a note without anchors for conventions unrelated to
+  the documentation.
+
+`note list` shows the status of every note:
+
+```
+ID  STATUS   PIN  VERSION  REVIEWED          ANCHORS                 TEXT
+7   stale    -    *        2026-11-20 14:02  guide/http.md (chg)     Use the retry helper…
+9   current  ★    *        2026-11-21 09:15  api/client.md           All calls go through…
+12  unknown  -    2.1.0    —                 —                       Do not use v1 auth…
+```
+
+- `current` — the anchored documents are unchanged.
+- `stale` — an anchor changed or disappeared (`anchor_changed`,
+  `anchor_deleted`), the library fingerprint changed for a library-level
+  anchor (`library_changed`), or the note was checked against another
+  variant (`version_differs`).
+- `unknown` — the note has no anchors (pre-v4 notes and `--no-anchor`).
+  Unknown notes never produce a warning.
+
+Only documents the note actually relies on mark it stale: editing an
+unrelated page does not.
 
 ## How notes reach agents
 
-When `get-library-docs` (or `virtudoc search --name`) runs, notes are
-scored for relevance to the query using the same normalization and
-stemming as full-text search. Relevant notes are included in a dedicated
-`notes` block **before** the documentation fragments, within the
-`notes.max_tokens` budget (default 800 tokens). Unrelated notes stay out of
-the response.
+When `get-library-docs` (or `virtudoc search --name`) runs, pinned notes come
+first, then the notes whose words match the query. Every note carries
+`status`, `stale_reason`, `changed_sources` and `reviewed_at` in the same
+response. If any note is stale, the payload adds `notes_warning`:
 
-Example: an agent asking about request timeouts receives both the
-library's `query()` signature and your team's "timeout=30s by default"
-convention — in one response, before any code is written.
+> N team note(s) may be outdated: the documentation they rely on changed
+> after they were written or last reviewed. If a note contradicts the
+> fragments, follow the fragments and tell the user the note may be outdated.
 
-## Keeping notes healthy
+Notes are never truncated. A note that does not fit the remaining
+`notes.max_tokens` budget is skipped and counted in `notes_omitted`. Pinned
+notes have their own budget, `notes.pinned_max_tokens` (default 400).
 
-Notes age. Each note records the revision of the indexed source it was
-written against — a short fingerprint of the indexed files and their content
-hashes, so it works for non-git sources too. `note list` prints it next to
-the note.
+## Confirming a note
 
-When the documentation changes, the note no longer describes the same
-source. `virtudoc doctor` reports it:
+After reviewing a note, confirm it against one variant:
 
-```
-  WARN local/mylib: note #3 is stale — the source changed since it was
-       written (note rev 4f2a91c8d0ab, current 9b7e3d1f5c22);
-       review it with 'virtudoc note list mylib'
+```bash
+virtudoc note review mylib 3
+virtudoc note review mylib 3 --reanchor   # pick anchors from the current docs
 ```
 
-Review the note, then either remove it or re-add it: a new note captures
-the current revision and is fresh again. Notes written before revision
-tracking have no revision recorded and are not reported. `doctor` exits
-with code `1` while stale notes remain, so CI can gate on it.
+`review` records the current document hashes, sets `reviewed_at` and clears
+the warning. `--all` reviews every note of the library after showing their
+statuses; add `--yes` for non-interactive runs.
+
+`virtudoc doctor` reports stale notes with the reason and the exact command:
+
+```
+  WARN mylib: note #7 is stale (anchor_changed: guide/http.md)
+         review:   virtudoc note review mylib 7
+         reanchor: virtudoc note review mylib 7 --reanchor
+```
+
+`doctor` exits with code `1` while notes are stale, so CI can gate on it.
