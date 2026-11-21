@@ -89,7 +89,9 @@ virtudoc note remove <name> --id N
 ```
 
 Notes are attached to a library, survive reindexing and are delivered to
-agents together with documentation. See [Project notes](notes.md).
+agents together with documentation. Each note records the source revision
+it was written against; `note list` shows it and `doctor` flags notes left
+behind by later documentation changes. See [Project notes](notes.md).
 
 ## init — project onboarding
 
@@ -132,8 +134,10 @@ virtudoc doctor
 ```
 
 Checks the data directory, schema version, every library's source path,
-link drift (re-evaluated live) and index integrity (orphan chunks/FTS
-rows). For git checkout sources it also warns when the checkout is on a
+link drift (re-evaluated live), stale notes and index integrity (orphan
+chunks/FTS rows). A note is stale when the indexed source changed since the
+note was written — the recorded revision no longer matches. For git
+checkout sources it also warns when the checkout is on a
 non-default branch or has uncommitted changes — the indexed docs then
 depend on someone's work in progress. Prints a report and exits with code
 `1` when problems are found — usable in CI.

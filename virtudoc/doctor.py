@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import Config, data_dir
 from .fetcher import PIN_FILE, read_pinned_branch
 from .indexer.indexer import load_index_failures
+from .notes import source_revision, stale_notes
 from .versions import extract_dep_version, version_status
 
 GIT_TIMEOUT = 10
@@ -118,6 +119,15 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 if len(failures) > 3:
                     shown += f", ... ({len(failures) - 3} more)"
                 result.warn(f"{lib['id']}: files failed to index: {shown}")
+            stale = stale_notes(conn, lib["id"])
+            if stale:
+                current = source_revision(conn, lib["id"])
+                for note in stale:
+                    result.warn(
+                        f"{lib['id']}: note #{note.id} is stale — the source changed "
+                        f"since it was written (note rev {note.source_rev}, current "
+                        f"{current}); review it with 'virtudoc note list {lib['name']}'"
+                    )
             _warn_unstable_source(result, lib["id"], source)
         else:
             result.warn(f"{lib['id']}: source directory missing: {source}")

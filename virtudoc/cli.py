@@ -25,7 +25,7 @@ from .indexer.indexer import (
     update_all,
 )
 from .logging_setup import setup_logging
-from .notes import add_note, list_notes, relevant_notes, remove_note
+from .notes import add_note, list_notes, relevant_notes, remove_note, source_revision
 from .onboarding import format_report, link_matches, scan_project
 from .search.engine import library_outline, search
 from .versions import MANIFEST_CANDIDATES, link_library, unlink_library
@@ -269,7 +269,8 @@ def cmd_note_add(args: argparse.Namespace, cfg: Config) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         note_id = add_note(conn, lib["id"], args.text)
-    print(f"added note #{note_id} to {lib['id']}")
+        revision = source_revision(conn, lib["id"])
+    print(f"added note #{note_id} to {lib['id']} (source revision {revision})")
     return 0
 
 
@@ -285,7 +286,7 @@ def cmd_note_list(args: argparse.Namespace, cfg: Config) -> int:
         print(f"no notes for {lib['id']}")
         return 0
     for note in notes:
-        print(f"#{note.id}\t{note.created_at}\t{note.text}")
+        print(f"#{note.id}\t{note.created_at}\t{note.source_rev or '-'}\t{note.text}")
     return 0
 
 

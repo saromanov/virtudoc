@@ -29,7 +29,7 @@ def test_schema_created(conn):
         "meta",
     } <= tables
     version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "3"
+    assert version == "4"
 
 
 _V1_SCHEMA = """
@@ -79,13 +79,47 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     migrated = open_db(path)
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
     assert "lang" in columns
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
     version = migrated.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "3"
+    assert version == "4"
     migrated.close()
 
     fresh = open_db(path)
     fresh.close()
+
+
+def test_migrates_v3_db_adds_notes_source_rev(home, tmp_path):
+    path = tmp_path / "index.db"
+    old = sqlite3.connect(path)
+    old.executescript(_V1_SCHEMA)
+    old.executescript(
+        """
+        CREATE TABLE notes (
+            id INTEGER PRIMARY KEY,
+            library_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    old.execute("PRAGMA user_version=3")
+    old.execute(
+        "INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+        " VALUES ('local/old', 'old', '/tmp', 't', 't')"
+    )
+    old.execute(
+        "INSERT INTO notes (library_id, text, created_at) VALUES ('local/old', 'legacy', 't')"
+    )
+    old.commit()
+    old.close()
+
+    migrated = open_db(path)
+    columns = {row[1] for row in migrated.execute("PRAGMA table_info(notes)")}
+    assert "source_rev" in columns
+    row = migrated.execute("SELECT text, source_rev FROM notes").fetchone()
+    assert row["text"] == "legacy"
+    assert row["source_rev"] == "", "legacy notes record no revision"
+    migrated.close()
 
 
 def test_trigram_table_backfilled_for_pre_v3_dbs(home, tmp_path):
@@ -291,7 +325,7 @@ def test_init_schema_does_not_write_when_schema_is_current(tmp_path):
     connection.execute("PRAGMA query_only=ON")
     init_schema(connection)  # must not attempt any write
     row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-    assert row[0] == "3"
+    assert row[0] == "4"
 
 
 def test_init_schema_recreates_a_missing_table(tmp_path):
