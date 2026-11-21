@@ -15,7 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import __version__
 from .config import Config, data_dir
-from .coverage import IdentifierChecker, extract_identifiers
+from .coverage import IdentifierChecker, extract_identifiers, query_coverage
 from .db import open_db
 from .fetcher import ensure_pinned_checkout
 from .indexer.chunker import Chunker
@@ -80,6 +80,7 @@ def _doc_payload(
     query: str,
     selection: NotesSelection,
     context: dict[str, Any],
+    coverage: str,
     missing: list[str],
     message: str | None,
     body_key: str,
@@ -98,6 +99,7 @@ def _doc_payload(
     payload["library_id"] = library_id
     payload["query"] = query
     payload.update(context)
+    payload["coverage"] = coverage
     if missing:
         payload["missing_identifiers"] = missing
     if message:
@@ -245,7 +247,9 @@ def build_server(config: Config) -> MCPServer:
                 pinned_budget_tokens=config.get_int("notes.pinned_max_tokens"),
                 checker=checker,
             )
-            missing = checker.missing(extract_identifiers(query))
+            query_identifiers = extract_identifiers(query)
+            checker.prefetch(query_identifiers)
+            missing = checker.missing(query_identifiers)
             apply_mentions_missing(selection.notes, missing)
             warning = mismatch_payload(conn, libraryId, project_path=projectPath)
             if mode == "outline":
@@ -256,6 +260,10 @@ def build_server(config: Config) -> MCPServer:
                     query=query,
                     selection=selection,
                     context={"mode": "outline", "section": section},
+                    coverage=query_coverage(
+                        query,
+                        [node.section for node in tree] if tree else [],
+                    ),
                     missing=missing,
                     message=None,
                     body_key="sections",
@@ -280,6 +288,7 @@ def build_server(config: Config) -> MCPServer:
                     query=query,
                     selection=selection,
                     context={"page": result.page},
+                    coverage="none",
                     missing=missing,
                     message=(
                         "no fragments found; the indexed documentation does not "
@@ -314,6 +323,7 @@ def build_server(config: Config) -> MCPServer:
                 query=query,
                 selection=selection,
                 context={"page": result.page},
+                coverage=query_coverage(query, [snippet.text for snippet in result.snippets]),
                 missing=missing,
                 message=message,
                 body_key="snippets",

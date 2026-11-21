@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -42,9 +43,13 @@ def _server_params(home) -> StdioServerParameters:
 
 
 def _run_cli(home: Path, *args: str) -> None:
+    # Minimal environment: a test must not borrow the developer's variables.
+    env = {"VIRTUDOC_HOME": str(home), "PATH": os.environ.get("PATH", "")}
+    if os.environ.get("SYSTEMROOT"):
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     result = subprocess.run(
         [sys.executable, "-m", "virtudoc", *args],
-        env={**os.environ, "VIRTUDOC_HOME": str(home)},
+        env=env,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -439,7 +444,7 @@ async def test_mcp_refreshes_stale_library_on_tool_call(home, docs_dir):
 
 
 @pytest.mark.anyio
-async def test_e2e_rename_and_delete_leave_no_stale_symbol_in_mcp_output(home, tmp_path):
+async def test_index_forgets_renamed_symbols_and_marks_query_uncovered(home, tmp_path):
     """A renamed or deleted method must disappear from the served fragments.
 
     The agent keeps one MCP session while the human edits the docs and runs
@@ -914,3 +919,100 @@ async def test_note_status_is_computed_after_refresh(home_index):
     payload = _payload(result)
     assert payload["notes"][0]["status"] == "stale"
     assert payload["notes"][0]["stale_reason"] == "anchor_changed"
+
+
+LEGACY_DOC = """# API Reference
+
+## Legacy auth
+
+legacyCreateToken validates credentials.
+
+## Modern auth
+
+modernCreateToken replaces the legacy flow.
+"""
+
+NEIGHBOR_DOC = """# Neighbor
+
+## Tokens
+
+neighborToken handles the create token legacy flow.
+"""
+
+
+def _apply_docs_change(docs: Path, change: str) -> Path | None:
+    api = docs / "api.md"
+    if change == "rename_symbol":
+        api.write_text(api.read_text().replace("legacyCreateToken", "legacyRenamedToken"))
+        return api
+    if change == "delete_section":
+        api.write_text(
+            "# API Reference\n\n## Modern auth\n\nmodernCreateToken replaces the legacy flow.\n"
+        )
+        return api
+    if change == "delete_file":
+        api.unlink()
+        return None
+    # Renames are not tracked: moving the file to a path the walker ignores
+    # makes the index see a deletion of the old document.
+    renamed = docs / "api.md.bak"
+    api.rename(renamed)
+    return renamed
+
+
+async def _inprocess_docs(server, library_id: str, query: str) -> dict:
+    result = await server.call_tool("get-library-docs", {"libraryId": library_id, "query": query})
+    return json.loads(result.content[0].text)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("refresh", ["update", "reindex", "auto"])
+@pytest.mark.parametrize(
+    "change", ["rename_symbol", "delete_section", "delete_file", "rename_file"]
+)
+async def test_changed_docs_leave_no_stale_symbol(home, tmp_path, refresh, change):
+    from virtudoc.mcp_server import build_server
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "api.md").write_text(LEGACY_DOC)
+    (docs / "neighbor.md").write_text(NEIGHBOR_DOC)
+
+    _run_cli(home, "add", str(docs), "--name", "demo")
+    _run_cli(
+        home,
+        "note",
+        "add",
+        "demo",
+        "--text",
+        "Use legacyCreateToken to validate credentials.",
+        "--path",
+        "api.md",
+    )
+
+    changed_path = _apply_docs_change(docs, change)
+    if refresh == "update":
+        _run_cli(home, "update")
+    elif refresh == "reindex":
+        _run_cli(home, "reindex", "demo")
+    elif changed_path is not None:
+        # Make the auto-refresh heuristic see the change regardless of the
+        # filesystem timestamp resolution.
+        stamp = time.time() + 2
+        os.utime(changed_path, (stamp, stamp))
+
+    server = build_server(Config())
+
+    old = await _inprocess_docs(server, "local/demo", "legacyCreateToken")
+    assert old["coverage"] in ("none", "partial")
+    assert "legacyCreateToken" in old["missing_identifiers"]
+    assert old["notes"][0]["status"] == "stale"
+    assert old["notes"][0]["stale_reason"] == "symbol_removed"
+
+    phrase = await _inprocess_docs(
+        server, "local/demo", "legacyCreateToken create token legacy flow"
+    )
+    assert phrase["coverage"] == "partial"
+
+    neighbor = await _inprocess_docs(server, "local/demo", "neighborToken")
+    assert neighbor["snippets"]

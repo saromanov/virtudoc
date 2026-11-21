@@ -20,7 +20,12 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
+from .db import fts_normalize
+from .search.engine import _TOKEN_RE, MIN_TOPIC_PREFIX, _stem, tokenize
+
 _CANDIDATE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_CODE_SPAN_RE = re.compile(r"`+([^`]+)`+")
+_FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
 _KEYWORDS = frozenset(
     {
@@ -145,6 +150,38 @@ class IdentifierChecker:
     def missing(self, identifiers: list[str]) -> list[str]:
         return [identifier for identifier in identifiers if not self.has(identifier)]
 
+    def prefetch(self, identifiers: list[str]) -> None:
+        """Resolve many identifiers at once from the symbols table.
+
+        One indexed query per 500 identifiers; databases indexed before the
+        table existed fall back to per-identifier checks.
+        """
+        pending = [
+            identifier for identifier in dict.fromkeys(identifiers) if identifier not in self.cache
+        ]
+        if not pending:
+            return
+        built = self.conn.execute(
+            "SELECT 1 FROM library_symbols WHERE library_id = ? LIMIT 1",
+            (self.library_id,),
+        ).fetchone()
+        if built is None:
+            for identifier in pending:
+                self.has(identifier)
+            return
+        for start in range(0, len(pending), 500):
+            batch = pending[start : start + 500]
+            keys = [identifier if "." in identifier else identifier.lower() for identifier in batch]
+            placeholders = ",".join("?" for _ in keys)
+            rows = self.conn.execute(
+                f"SELECT symbol FROM library_symbols "
+                f"WHERE library_id = ? AND symbol IN ({placeholders})",
+                (self.library_id, *keys),
+            ).fetchall()
+            present = {row["symbol"] for row in rows}
+            for identifier, key in zip(batch, keys, strict=True):
+                self.cache[identifier] = key in present
+
 
 def _looks_like_identifier(candidate: str, *, called: bool) -> bool:
     lowered = candidate.lower()
@@ -161,15 +198,30 @@ def _looks_like_identifier(candidate: str, *, called: bool) -> bool:
     return False
 
 
+def _code_ranges(text: str) -> list[tuple[int, int]]:
+    ranges = [(match.start(1), match.end(1)) for match in _CODE_SPAN_RE.finditer(text)]
+    ranges.extend((match.start(1), match.end(1)) for match in _FENCE_RE.finditer(text))
+    return ranges
+
+
 def extract_identifiers(text: str, *, limit: int | None = None) -> list[str]:
-    """Identifiers mentioned in a note or a query, in order of appearance."""
+    """Identifiers mentioned in a note or a query, in order of appearance.
+
+    Text inside backticks and fenced code blocks is trusted as code, so a
+    single capitalised word such as `Session` is kept there (R1).
+    """
+    code_ranges = _code_ranges(text)
     seen: set[str] = set()
     found: list[str] = []
     for match in _CANDIDATE_RE.finditer(text):
         candidate = match.group(0)
+        in_code = any(start <= match.start() < end for start, end in code_ranges)
         tail = text[match.end() : match.end() + 2]
         called = tail.startswith("(")
-        if not _looks_like_identifier(candidate, called=called):
+        if in_code:
+            if candidate.lower() in _KEYWORDS:
+                continue
+        elif not _looks_like_identifier(candidate, called=called):
             continue
         symbol = candidate.rstrip(".")
         if symbol in seen:
@@ -181,38 +233,129 @@ def extract_identifiers(text: str, *, limit: int | None = None) -> list[str]:
     return found
 
 
-def library_has_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
-    """True when the indexed chunks of this variant mention the identifier.
+def symbols_in_text(text: str) -> set[str]:
+    """Every identifier-ish token of a document, for the fast lookup table.
 
-    The trigram index answers substring queries without scanning every chunk.
-    Identifiers shorter than one trigram fall back to LIKE.
+    Lower-cased forms serve case-insensitive plain identifiers; qualified
+    names are also stored exactly for the case-sensitive member check.
     """
-    if not identifier:
-        return False
+    found: set[str] = set()
+    for match in _CANDIDATE_RE.finditer(text):
+        token = match.group(0).rstrip(".")
+        found.add(token.lower())
+        if "." in token:
+            found.add(token)
+    return found
+
+
+def rebuild_library_symbols(conn: sqlite3.Connection, library_id: str) -> None:
+    """Rebuild `library_symbols` for one variant (called by the indexer)."""
+    conn.execute("DELETE FROM library_symbols WHERE library_id = ?", (library_id,))
+    symbols: set[str] = set()
+    for row in conn.execute("SELECT text FROM chunks WHERE library_id = ?", (library_id,)):
+        symbols |= symbols_in_text(row["text"])
+    if symbols:
+        conn.executemany(
+            "INSERT OR IGNORE INTO library_symbols (library_id, symbol) VALUES (?, ?)",
+            [(library_id, symbol) for symbol in symbols],
+        )
+
+
+def _scan_has_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
+    """Fallback for databases indexed before the symbols table existed."""
+    qualified = "." in identifier
     if len(identifier) >= 3:
         try:
-            row = conn.execute(
-                """
+            sql = """
                 SELECT 1
                 FROM chunks_tri
                 JOIN chunks c ON c.id = chunks_tri.rowid
                 WHERE chunks_tri MATCH ? AND c.library_id = ?
-                LIMIT 1
-                """,
-                (f'"{identifier.replace(chr(34), chr(34) * 2)}"', library_id),
-            ).fetchone()
-            if row is not None:
-                return True
-            # An exact substring match is authoritative; do not fall through
-            # to LIKE, which could match across token boundaries only.
-            return False
+            """
+            params: tuple = (
+                f'"{identifier.replace(chr(34), chr(34) * 2)}"',
+                library_id,
+            )
+            if qualified:
+                sql += " AND instr(c.text, ?) > 0"
+                params += (identifier,)
+            sql += " LIMIT 1"
+            return conn.execute(sql, params).fetchone() is not None
         except sqlite3.OperationalError:
             pass
+    sql = "SELECT 1 FROM chunks WHERE library_id = ? AND "
+    params = (library_id,)
+    if qualified:
+        sql += "instr(text, ?) > 0"
+        params += (identifier,)
+    else:
+        sql += "text LIKE ?"
+        params += (f"%{identifier}%",)
+    sql += " LIMIT 1"
+    return conn.execute(sql, params).fetchone() is not None
+
+
+def library_has_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
+    """True when the indexed chunks of this variant mention the identifier.
+
+    Plain identifiers match case-insensitively (R1); qualified names with a
+    dot are member references and match case-sensitively (R5). The
+    `library_symbols` table makes this a primary-key lookup.
+    """
+    if not identifier:
+        return False
+    key = identifier if "." in identifier else identifier.lower()
     row = conn.execute(
-        "SELECT 1 FROM chunks WHERE library_id = ? AND text LIKE ? LIMIT 1",
-        (library_id, f"%{identifier}%"),
+        "SELECT 1 FROM library_symbols WHERE library_id = ? AND symbol = ?",
+        (library_id, key),
     ).fetchone()
-    return row is not None
+    if row is not None:
+        return True
+    built = conn.execute(
+        "SELECT 1 FROM library_symbols WHERE library_id = ? LIMIT 1", (library_id,)
+    ).fetchone()
+    if built is not None:
+        return False
+    return _scan_has_identifier(conn, library_id, identifier)
+
+
+def anchorable_identifier(conn: sqlite3.Connection, library_id: str, identifier: str) -> bool:
+    """Whether a note may track this identifier as an anchor.
+
+    A qualified name is tracked when its root is in the docs: the member is
+    compared exactly at status time, so `Session.open` gets `symbol_removed`
+    when the docs only ever had `session` (R5).
+    """
+    if "." in identifier:
+        root = identifier.split(".", 1)[0]
+        return library_has_identifier(conn, library_id, root)
+    return library_has_identifier(conn, library_id, identifier)
+
+
+def query_coverage(query: str, texts: list[str]) -> str:
+    """How much of the query the returned text covers: full, partial or none.
+
+    Coverage is word-level: identifiers alone may be absent while the prose
+    part of the query is answered, which is exactly the `partial` case an
+    agent must not present as a complete answer.
+    """
+    tokens = tokenize(query)
+    if not tokens:
+        return "none"
+    words = set(_TOKEN_RE.findall(fts_normalize(" ".join(texts).lower())))
+    covered = 0
+    for token in tokens:
+        stem = _stem(token)
+        if any(
+            word == token
+            or word == stem
+            or (len(stem) >= MIN_TOPIC_PREFIX and word.startswith(stem))
+            for word in words
+        ):
+            covered += 1
+    if covered == 0:
+        return "none"
+    return "full" if covered == len(tokens) else "partial"
 
 
 def missing_identifiers(

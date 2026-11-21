@@ -93,6 +93,7 @@ def _schema_ready(conn: sqlite3.Connection) -> bool:
         "notes",
         "note_anchors",
         "note_symbols",
+        "library_symbols",
         "project_links",
         "meta",
     }
@@ -114,6 +115,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         return
     fts_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'").fetchone()
     tri_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'chunks_tri'").fetchone()
+    symbols_existed = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'library_symbols'"
+    ).fetchone()
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS libraries (
@@ -189,6 +193,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_note_symbols_symbol ON note_symbols(symbol);
 
+        CREATE TABLE IF NOT EXISTS library_symbols (
+            library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL,
+            PRIMARY KEY (library_id, symbol)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_library_symbols_symbol ON library_symbols(symbol);
+
         CREATE TABLE IF NOT EXISTS note_anchors (
             note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
             library_id TEXT NOT NULL,
@@ -242,10 +254,24 @@ def init_schema(conn: sqlite3.Connection) -> None:
     elif note_columns and "anchor_kind" not in note_columns:
         conn.execute("ALTER TABLE notes ADD COLUMN anchor_kind TEXT NOT NULL DEFAULT 'library'")
     if needs_note_scope:
-        # Local import: notes imports this module for primitives.
+        # Local imports: notes and coverage import this module for primitives.
+        from .coverage import rebuild_library_symbols
         from .notes import backfill_note_scope
 
+        for library in conn.execute(
+            "SELECT id FROM libraries WHERE EXISTS "
+            "(SELECT 1 FROM documents d WHERE d.library_id = libraries.id)"
+        ).fetchall():
+            rebuild_library_symbols(conn, library["id"])
         backfill_note_scope(conn)
+    elif not symbols_existed:
+        from .coverage import rebuild_library_symbols
+
+        for library in conn.execute(
+            "SELECT id FROM libraries WHERE EXISTS "
+            "(SELECT 1 FROM documents d WHERE d.library_id = libraries.id)"
+        ).fetchall():
+            rebuild_library_symbols(conn, library["id"])
     conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_name ON notes(library_name)")
     if not fts_existed:
         # the FTS table was just recreated — restore pre-v3 rows

@@ -64,6 +64,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not bench'"
+markers = [
+    "bench: performance benchmarks, run manually with -m bench",
+]
 
 [tool.coverage.run]
 source = ["virtudoc"]

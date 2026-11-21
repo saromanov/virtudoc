@@ -157,6 +157,8 @@ default environment, so the data directory is `~/.virtudoc` — set
   Identifiers from the query that the docs never mention are listed in
   `missing_identifiers`; notes mentioning them carry `mentions_missing`,
   and a note whose symbol anchor disappeared is stale with `symbol_removed`.
+  `coverage` reports `full`, `partial` or `none` for how much of the query
+  the returned fragments answer.
   Pinned notes are always included; notes that do not fit are counted in
   `notes_omitted` and never truncated. Empty results state that the index does
   not cover the query, tell the agent not to answer from memory, and
@@ -244,6 +246,9 @@ pip install -e '.[dev]'
 pytest
 ruff check virtudoc tests
 ruff format virtudoc tests
+
+# Notes overhead benchmark (writes bench-results.json)
+pytest -m bench tests/bench -q -s
 ```
 
 ## Status

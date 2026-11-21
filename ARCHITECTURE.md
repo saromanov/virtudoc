@@ -107,6 +107,7 @@ the matching id when one exists.
 | `notes` | Project notes (KF-03, M3) | `library_id`, `library_name`, `origin_library_id`, `version`, `text`, `created_at`, `source_rev`, `pinned`, `reviewed_at`, `anchor_kind` |
 | `note_anchors` | Documents a note relies on | `note_id`, `library_id`, `rel_path`, `content_hash`, `anchored_at` |
 | `note_symbols` | Identifiers a note relies on | `note_id`, `symbol`, `anchored_at` |
+| `library_symbols` | Identifier lookup per variant | `library_id`, `symbol` (lower-cased plain, exact qualified) |
 | `project_links` | Manifest links (KF-04, M3) | `manifest_path`, `dep_version` |
 | `meta` | Schema version | `key`, `value` |
 
@@ -117,7 +118,8 @@ sees them; `notes.scope_version` restricts a note to one variant.
 `note_symbols` the identifiers found in the docs at anchor time. Symbol
 anchors are checked against every served variant, which makes them the
 cross-version signal (`symbol_removed`). `coverage.py` extracts identifiers
-and answers whether the docs mention one, using the trigram index.
+and answers whether the docs mention one; `library_symbols` is rebuilt by the
+indexer and turns those checks into a primary-key lookup.
 `notes.source_rev` fingerprints the whole variant and stays as the baseline
 for library-level anchors. Agents get `current`/`stale`/`unknown` per note,
 plus `notes_warning` when an anchor changed. `libraries.source_fingerprint`

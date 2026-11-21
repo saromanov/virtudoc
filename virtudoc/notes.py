@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from .coverage import (
     IdentifierChecker,
+    anchorable_identifier,
     extract_identifiers,
     library_has_identifier,
 )
@@ -280,7 +281,7 @@ def add_note(
     else:
         identifiers = extract_identifiers(text, limit=max_symbols)
         symbols = [
-            symbol for symbol in identifiers if library_has_identifier(conn, variant_id, symbol)
+            symbol for symbol in identifiers if anchorable_identifier(conn, variant_id, symbol)
         ]
         if paths:
             missing = [path for path in paths if _document_hash(conn, variant_id, path) is None]
@@ -519,6 +520,7 @@ def note_statuses(
         ):
             symbol_rows.setdefault(row["note_id"], []).append(row["symbol"])
     checker = checker or IdentifierChecker(conn, variant_id)
+    checker.prefetch([symbol for symbols in symbol_rows.values() for symbol in symbols])
     for note in ordered:
         _describe_status(
             conn,
@@ -569,16 +571,35 @@ def select_notes(
     variant = _library_row(conn, library_id)
     variant_id = variant["id"] if variant is not None else library_id
     variant_version = variant["version"] if variant is not None else None
+    if budget_tokens <= 0:
+        return NotesSelection()
     notes = [
         note
         for note in note_statuses(conn, variant_id, checker=checker)
         if _version_matches(note.scope_version, variant_version)
     ]
     tokens = tokenize(query)
+    token_stems = [(token, _stem(token)) for token in tokens]
     for note in notes:
         haystack = fts_normalize(note.text.lower())
         words = _TOKEN_RE.findall(haystack)
-        note.score = sum(1 for tok in tokens if _note_token_matches(tok, words)) if tokens else 0
+        word_set = set(words)
+        prefixes: set[str] = set()
+        for word in words:
+            for length in range(MIN_TOPIC_PREFIX, len(word) + 1):
+                prefixes.add(word[:length])
+        if not token_stems:
+            note.score = 0
+            continue
+        matched = 0
+        for token, stem in token_stems:
+            if (
+                token in word_set
+                or stem in word_set
+                or (len(stem) >= MIN_TOPIC_PREFIX and stem in prefixes)
+            ):
+                matched += 1
+        note.score = matched
 
     pinned = sorted((note for note in notes if note.pinned), key=lambda n: -n.id)
     rest = sorted(
@@ -673,7 +694,7 @@ def review_note(
         )
         identifiers = extract_identifiers(note.text, limit=max_symbols)
         symbols = [
-            symbol for symbol in identifiers if library_has_identifier(conn, variant_id, symbol)
+            symbol for symbol in identifiers if anchorable_identifier(conn, variant_id, symbol)
         ]
         _write_symbols(conn, note_id, symbols)
         if selected:
@@ -834,7 +855,7 @@ def backfill_note_scope(conn: sqlite3.Connection) -> None:
             symbols = [
                 symbol
                 for symbol in extract_identifiers(row["text"])
-                if library_has_identifier(conn, library_id, symbol)
+                if anchorable_identifier(conn, library_id, symbol)
             ]
             if selected:
                 anchor_kind = ANCHOR_DOCUMENTS
