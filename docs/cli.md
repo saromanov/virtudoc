@@ -6,11 +6,16 @@ on success and non-zero on error, so the CLI is scriptable.
 ## add — register a source and index it
 
 ```bash
-virtudoc add <path> --name <name> [--version V] [--description TEXT] [--replace]
+virtudoc add <path> --name <name> [--version V] [--description TEXT]
+                    [--channel release|branch] [--branch] [--replace]
 ```
 
-Registers the directory as a library `local/<name>` and runs the first
-indexing. Names must be lowercase latin with digits, hyphens and
+Registers the directory as a library and runs the first indexing. The first
+release gets the canonical id `local/<name>`; another release of the same
+name gets `local/<name>@<version>`, so several releases can be indexed side
+by side. A working branch is opt-in: `--channel branch` (or the `--branch`
+shorthand) registers it as `local/<name>@branch` and it never outranks a
+release. Names must be lowercase latin with digits, hyphens and
 underscores. On a name conflict the command fails without changes; pass
 `--replace` to overwrite an existing library.
 
@@ -40,7 +45,8 @@ library registration survive a rebuild.
 ## fetch — download remote documentation
 
 ```bash
-virtudoc fetch --repo <url> --name <name> [--version V] [--branch B] [--replace]
+virtudoc fetch --repo <url> --name <name> [--version V] [--branch B]
+               [--channel release|branch] [--replace]
 ```
 
 The only command that uses the network. Git URLs are cloned with
@@ -64,8 +70,11 @@ alone); `doctor` warns when the checkout and the pin disagree.
 virtudoc list
 ```
 
-One line per library: id, document count, chunk count, index size, last
-update, source path.
+One line per library: id, documentation version, channel (release or
+branch), document count, chunk count, index size, last update, source path.
+Commands that take a name (`update`, `reindex`, `remove`, `search`,
+`note`, `link`) accept either the canonical name or a full versioned id
+such as `local/mylib@2.2.0`.
 
 ## search — search from the terminal
 

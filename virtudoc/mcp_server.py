@@ -22,7 +22,12 @@ from .indexer.indexer import refresh_if_stale
 from .logging_setup import get_logger
 from .notes import relevant_notes
 from .search.engine import library_outline, resolve_libraries, search, top_level_sections
-from .versions import mismatch_payload
+from .versions import (
+    ResolvedVersion,
+    library_version_choices,
+    mismatch_payload,
+    resolve_project_version,
+)
 
 logger = get_logger("mcp")
 
@@ -31,7 +36,11 @@ MAX_TOKENS_HARD_LIMIT = 20000
 RESOLVE_DESCRIPTION = (
     "Find the documentation library (id like 'local/<name>') for a given library "
     "name and the user's question. Always call this first to get a libraryId, "
-    "then call get-library-docs with that id. If no library is found, register "
+    "then call get-library-docs with that id. The version is resolved from the "
+    "consuming project's lockfile or manifest (projectPath, defaults to the "
+    "server working directory) and the matching release is ranked first. When "
+    "that version is not indexed, the response lists the available versions: "
+    "ask the user before using another release. If no library is found, register "
     "the documentation source with the 'virtudoc add <path> --name <name>' CLI command."
 )
 
@@ -44,8 +53,20 @@ GET_DOCS_DESCRIPTION = (
     "nothing is found, the response contains top-level sections of the library "
     "to help rephrase the query. Use mode='outline' to get the section tree "
     "with token estimates instead of fragments, and 'section' to restrict the "
-    "output to one branch (e.g. 'API -> Middleware')."
+    "output to one branch (e.g. 'API -> Middleware'). The response warns with "
+    "'version_mismatch' when the indexed docs differ from the version resolved "
+    "from the project's lockfile (projectPath, defaults to the server working "
+    "directory); follow 'suggested_library_id' when it is present."
 )
+
+
+def _project_payload(project: Path, resolved: ResolvedVersion) -> dict[str, str]:
+    return {
+        "path": str(project),
+        "manifest": str(resolved.manifest_path),
+        "dependency_name": resolved.dependency_name,
+        "dependency_version": resolved.version,
+    }
 
 
 def build_server(config: Config) -> MCPServer:
@@ -71,18 +92,40 @@ def build_server(config: Config) -> MCPServer:
         return closing(open_db(config.db_path))
 
     @server.tool(name="find-library", description=RESOLVE_DESCRIPTION)
-    def find_library(libraryName: str, query: str) -> dict[str, Any]:
+    def find_library(
+        libraryName: str,
+        query: str,
+        projectPath: str | None = None,
+    ) -> dict[str, Any]:
+        project = Path(projectPath).expanduser() if projectPath else Path.cwd()
+        resolved = resolve_project_version(project, libraryName)
         with connect() as conn:
-            matches = resolve_libraries(conn, libraryName, query)
+            matches = resolve_libraries(
+                conn,
+                libraryName,
+                query,
+                resolved_version=resolved.version if resolved else None,
+            )
+            choices = library_version_choices(conn, libraryName)
+            if not choices:
+                seen: set[str] = set()
+                for match in matches:
+                    for choice in library_version_choices(conn, match.name):
+                        if choice["id"] not in seen:
+                            seen.add(choice["id"])
+                            choices.append(choice)
         if not matches:
-            return {
+            payload: dict[str, Any] = {
                 "libraries": [],
                 "message": (
                     "no libraries found; register a documentation source with "
                     "the 'virtudoc add <path> --name <name>' CLI command"
                 ),
             }
-        return {
+            if resolved is not None:
+                payload["project"] = _project_payload(project, resolved)
+            return payload
+        payload = {
             "libraries": [
                 {
                     "id": match.id,
@@ -90,10 +133,30 @@ def build_server(config: Config) -> MCPServer:
                     "description": match.description,
                     "chunk_count": match.chunk_count,
                     "updated_at": match.updated_at,
+                    "version": match.version,
+                    "channel": match.channel,
+                    "version_status": match.version_status,
                 }
                 for match in matches
             ]
         }
+        if choices:
+            payload["available_versions"] = choices
+        if resolved is not None:
+            payload["project"] = _project_payload(project, resolved)
+            payload["resolved_version"] = resolved.version
+            if not any(match.version_status == "match" for match in matches):
+                available = ", ".join(
+                    f"{choice['version'] or 'unversioned'} ({choice['id']})" for choice in choices
+                )
+                payload["version_not_indexed"] = True
+                payload["message"] = (
+                    f"the project depends on {resolved.dependency_name} "
+                    f"{resolved.version} ({resolved.manifest_path.name}), but that "
+                    f"version is not indexed (available: {available or 'none'}). "
+                    "Ask the user before using another version."
+                )
+        return payload
 
     @server.tool(name="get-library-docs", description=GET_DOCS_DESCRIPTION)
     def get_library_docs(
@@ -104,6 +167,7 @@ def build_server(config: Config) -> MCPServer:
         page: int = 1,
         mode: str = "fragments",
         section: str | None = None,
+        projectPath: str | None = None,
     ) -> dict[str, Any]:
         if mode not in ("fragments", "outline"):
             raise ToolError(f"unsupported mode: {mode!r}; supported: 'fragments', 'outline'")
@@ -138,7 +202,7 @@ def build_server(config: Config) -> MCPServer:
                     "notes": notes,
                     "total_tokens": sum(node.token_est for node in tree),
                 }
-                warning = mismatch_payload(conn, libraryId)
+                warning = mismatch_payload(conn, libraryId, project_path=projectPath)
                 return {"version_mismatch": warning, **payload} if warning else payload
             result = search(
                 conn,
@@ -151,7 +215,7 @@ def build_server(config: Config) -> MCPServer:
                 section=section,
                 window_tokens=config.get_int("search.snippet_window_tokens"),
             )
-            warning = mismatch_payload(conn, libraryId)
+            warning = mismatch_payload(conn, libraryId, project_path=projectPath)
             if not result.snippets and not result.total_matches:
                 payload = {
                     "library_id": libraryId,

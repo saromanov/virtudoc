@@ -62,12 +62,22 @@ def scan_project(conn: sqlite3.Connection, project_path: Path) -> ProjectScan:
             seen.setdefault(name, DependencyEntry(name=name, version=version, manifest=manifest))
     scan.dependencies = list(seen.values())
 
-    libraries = {normalize_name(row["name"]): row for row in list_libraries(conn)}
+    libraries: dict[str, list] = {}
+    for row in list_libraries(conn):
+        libraries.setdefault(normalize_name(row["name"]), []).append(row)
     for dependency in scan.dependencies:
-        library = libraries.get(dependency.name)
-        if library is None:
+        candidates = libraries.get(dependency.name)
+        if not candidates:
             scan.unmatched.append(dependency)
             continue
+        library = next(
+            (
+                row
+                for row in candidates
+                if version_status(row["version"], dependency.version) == "match"
+            ),
+            sorted(candidates, key=lambda row: (row["channel"] != "release", row["id"]))[0],
+        )
         scan.matches.append(
             LibraryMatch(
                 library_id=library["id"],

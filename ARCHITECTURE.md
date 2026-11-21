@@ -85,11 +85,22 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
    limit (20); exceeding the budget is not an error — output is cut at a
    chunk boundary with a 10% margin.
 
+### Version-aware ranking
+
+`find-library` resolves the dependency version from the consuming project's
+lockfile or manifest (lockfiles first) before ranking libraries. The
+matching indexed release is boosted; other versions are not removed from
+the candidate list, and an indexed working branch (`channel = 'branch'`)
+never outranks a release. If the resolved version is not indexed, the
+response lists `available_versions` and tells the agent to ask the user.
+`get-library-docs` repeats the drift warning for the chosen id and suggests
+the matching id when one exists.
+
 ## Storage schema
 
 | Table | Purpose | Key fields |
 |---|---|---|
-| `libraries` | Library registry | `id` (`local/<name>`), `source_path`, `version`, `updated_at` |
+| `libraries` | Library registry | `id` (`local/<name>` or `local/<name>@<version>`), `source_path`, `version`, `channel`, `updated_at` |
 | `documents` | Indexed files | `library_id`, `rel_path`, `content_hash`, `indexed_at` |
 | `chunks` | Unit of retrieval | `heading_path`, `ord`, `text`, `token_est`, `code_ratio`, `lang` |
 | `chunks_fts` | Virtual FTS5 table | `text` (external content of `chunks`), linked by `rowid` |

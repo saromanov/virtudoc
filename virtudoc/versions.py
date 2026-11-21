@@ -30,6 +30,28 @@ class VersionInfo:
     dep_version: str
 
 
+@dataclass
+class ResolvedVersion:
+    """The dependency version a consuming project actually locks or declares."""
+
+    manifest_path: Path
+    version: str
+    dependency_name: str
+
+
+# Lockfiles resolve exact versions, so they win over declared ranges in a
+# direct manifest. The order follows `detect_manifest`, with lockfiles first.
+RESOLUTION_ORDER = (
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "pyproject.toml",
+    "package.json",
+    "requirements.txt",
+    "go.mod",
+)
+
+
 _PACKAGE_SEPARATORS = re.compile(r"[-_.]+")
 
 
@@ -50,6 +72,54 @@ def list_manifests(project_path: Path) -> list[Path]:
     """Every supported manifest present in the directory, in priority order."""
     return [
         path for path in (project_path / name for name in MANIFEST_CANDIDATES) if path.is_file()
+    ]
+
+
+def resolve_project_version(project_path: Path, library_name: str) -> ResolvedVersion | None:
+    """Resolve the version the project uses, preferring lockfiles.
+
+    A declared range such as ``>=2.0`` does not identify the installed
+    release; a lockfile does. When several manifests mention the dependency,
+    the first entry of :data:`RESOLUTION_ORDER` wins.
+    """
+    project_path = Path(project_path).expanduser()
+    if not project_path.is_dir():
+        return None
+    manifests = {path.name: path for path in list_manifests(project_path)}
+    dependency = normalize_name(library_name)
+    for name in RESOLUTION_ORDER:
+        manifest = manifests.get(name)
+        if manifest is None:
+            continue
+        version = extract_dep_version(manifest, dependency)
+        if version:
+            return ResolvedVersion(
+                manifest_path=manifest,
+                version=version,
+                dependency_name=dependency,
+            )
+    return None
+
+
+def library_version_choices(conn: sqlite3.Connection, name_or_id: str) -> list[dict]:
+    """Indexed releases and branches of one library name, with their ids."""
+    name = name_or_id.rsplit("/", 1)[-1].split("@", 1)[0]
+    rows = conn.execute(
+        """
+        SELECT id, name, version, channel
+        FROM libraries WHERE name = ?
+        ORDER BY CASE channel WHEN 'release' THEN 0 ELSE 1 END, id
+        """,
+        (name,),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "version": row["version"],
+            "channel": row["channel"],
+        }
+        for row in rows
     ]
 
 
@@ -220,7 +290,20 @@ def link_library(
     project_path = Path(project_path).expanduser().resolve()
     if not project_path.is_dir():
         raise ValueError(f"project directory not found: {project_path}")
-    manifest = Path(manifest).expanduser().resolve() if manifest else detect_manifest(project_path)
+    row = conn.execute("SELECT name FROM libraries WHERE id = ?", (library_id,)).fetchone()
+    lib_name = row["name"] if row is not None else library_id.rsplit("/", 1)[-1].split("@", 1)[0]
+
+    explicit = Path(manifest).expanduser().resolve() if manifest else None
+    version: str | None = None
+    if explicit is None:
+        resolved = resolve_project_version(project_path, lib_name)
+        if resolved is not None:
+            manifest = resolved.manifest_path
+            version = resolved.version
+    else:
+        manifest = explicit
+    if manifest is None:
+        manifest = detect_manifest(project_path)
     if manifest is None:
         raise ValueError(
             f"no dependency manifest found in {project_path}; "
@@ -228,8 +311,8 @@ def link_library(
         )
     if not manifest.is_file():
         raise ValueError(f"dependency manifest not found: {manifest}")
-    lib_name = library_id.rsplit("/", 1)[-1]
-    version = extract_dep_version(manifest, lib_name)
+    if version is None:
+        version = extract_dep_version(manifest, lib_name)
     if version is None:
         raise ValueError(
             f"dependency '{lib_name}' not found in {manifest.name}; "
@@ -259,26 +342,72 @@ def get_link(conn: sqlite3.Connection, library_id: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
-def mismatch_payload(conn: sqlite3.Connection, library_id: str) -> dict | None:
-    """version_mismatch warning dict, or None when versions match/no link."""
-    link = get_link(conn, library_id)
-    if link is None:
-        return None
-    doc_version = conn.execute(
-        "SELECT version FROM libraries WHERE id = ?", (library_id,)
+def mismatch_payload(
+    conn: sqlite3.Connection,
+    library_id: str,
+    *,
+    project_path: Path | str | None = None,
+) -> dict | None:
+    """version_mismatch warning dict, or None when versions match/no link.
+
+    An explicit project link takes priority. Without one, the version is
+    resolved from the consuming project's manifests (the server's working
+    directory by default), so an agent sees the drift before trusting the
+    snippets.
+    """
+    library = conn.execute(
+        "SELECT name, version FROM libraries WHERE id = ?", (library_id,)
     ).fetchone()
-    doc_version = doc_version["version"] if doc_version else None
-    status = version_status(doc_version, link["dep_version"])
-    if status != "mismatch":
+    if library is None:
         return None
+    doc_version = library["version"]
+    link = get_link(conn, library_id)
+    if link is not None:
+        dep_version = link["dep_version"]
+        manifest_path = Path(link["manifest_path"])
+    else:
+        resolved = resolve_project_version(
+            Path(project_path) if project_path else Path.cwd(),
+            library["name"],
+        )
+        if resolved is None:
+            return None
+        dep_version = resolved.version
+        manifest_path = resolved.manifest_path
+    if version_status(doc_version, dep_version) != "mismatch":
+        return None
+
+    choices = library_version_choices(conn, library_id)
+    suggested = next(
+        (choice for choice in choices if version_status(choice["version"], dep_version) == "match"),
+        None,
+    )
+    available = ", ".join(
+        f"{choice['version'] or 'unversioned'} ({choice['id']})" for choice in choices
+    )
+    message = (
+        f"version drift: indexed documentation is {doc_version or 'unknown'}, "
+        f"but the project depends on {dep_version} "
+        f"({manifest_path.name})"
+    )
+    if suggested is not None and suggested["id"] != library_id:
+        message += (
+            f"; indexed version {suggested['version']} matches the project — "
+            f"use library id {suggested['id']}"
+        )
+    elif suggested is None:
+        message += (
+            f"; project version {dep_version} is not indexed "
+            f"(available: {available or 'none'}) — "
+            "ask the user before using a different version"
+        )
     return {
         "library_id": library_id,
         "documentation_version": doc_version,
-        "project_version": link["dep_version"],
-        "manifest": link["manifest_path"],
-        "message": (
-            f"version drift: indexed documentation is {doc_version or 'unknown'}, "
-            f"but the project depends on {link['dep_version']} "
-            f"({Path(link['manifest_path']).name})"
-        ),
+        "project_version": dep_version,
+        "manifest": str(manifest_path),
+        "available_versions": choices,
+        "suggested_library_id": suggested["id"] if suggested else None,
+        "version_not_indexed": suggested is None,
+        "message": message,
     }

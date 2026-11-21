@@ -14,9 +14,10 @@ The command:
 
 1. Finds the project's dependency manifest — `pyproject.toml`,
    `package.json`, `requirements.txt`, `go.mod`, `uv.lock`, `poetry.lock`
-   or `Pipfile.lock` (in this order; lockfiles are checked last, as
-   fallbacks). Poetry-style `[tool.poetry.dependencies]` in
-   `pyproject.toml` is recognized too.
+   or `Pipfile.lock`. Lockfiles are consulted first: they record the exact
+   installed release, while a direct manifest may only declare a range.
+   Poetry-style `[tool.poetry.dependencies]` in `pyproject.toml` is
+   recognized too.
 2. Locates the dependency by the library name (matching is
    case-insensitive; underscores and hyphens are treated as equivalent).
 3. Records the expected version in the index.
@@ -27,6 +28,56 @@ produce no warning.
 
 A library can have one link; linking again replaces it.
 `virtudoc unlink mylib` removes the connection.
+
+## Indexing several versions
+
+The first release of a library keeps the canonical id (`local/mylib`).
+Further releases are stored next to it with their version in the id:
+
+```bash
+virtudoc add /docs/mylib-2.1 --name mylib --version 2.1.0  # local/mylib
+virtudoc add /docs/mylib-2.2 --name mylib --version 2.2.0  # local/mylib@2.2.0
+```
+
+Versions never compete blindly. `find-library` resolves the version from
+the consuming project's lockfile or manifest (optional `projectPath`,
+defaults to the server working directory) and ranks the matching release
+first. Command-line reference:
+
+```bash
+virtudoc add <path> --name mylib --version 2.2.0 [--channel release|branch]
+virtudoc add <path> --name mylib --branch      # shorthand for --channel branch
+```
+
+A working branch is opt-in (`--channel branch` or `--branch`, and
+`--channel branch` on `fetch`). It gets a `local/<name>@branch` id and
+never outranks a release of the same library. Index releases first; add a
+working tree only while you need it.
+
+## When the project version is not indexed
+
+`find-library` returns `available_versions` and `version_not_indexed: true`
+when the resolved version has no indexed release. The message tells the
+agent to ask the user before using another version. `get-library-docs`
+repeats the drift warning and, when possible, points at the matching id:
+
+```json
+{
+  "version_mismatch": {
+    "library_id": "local/mylib",
+    "documentation_version": "2.1.0",
+    "project_version": "2.2.0",
+    "manifest": "/path/to/project/uv.lock",
+    "available_versions": [
+      { "id": "local/mylib", "version": "2.1.0", "channel": "release" },
+      { "id": "local/mylib@2.2.0", "version": "2.2.0", "channel": "release" }
+    ],
+    "suggested_library_id": "local/mylib@2.2.0",
+    "version_not_indexed": false,
+    "message": "version drift: indexed documentation is 2.1.0, but the project depends on 2.2.0 (uv.lock); indexed version 2.2.0 matches the project — use library id local/mylib@2.2.0"
+  }
+}
+```
 
 ## Bulk onboarding with `virtudoc init`
 

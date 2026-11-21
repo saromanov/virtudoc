@@ -42,6 +42,12 @@ through OIDC trusted publishing — no tokens are stored in the repository.
 # Register a documentation directory and index it
 virtudoc add /path/to/docs --name mylib --version 2.1.0
 
+# Index another release of the same library (different id: local/mylib@2.2.0)
+virtudoc add /path/to/docs-2.2 --name mylib --version 2.2.0
+
+# Opt into a working tree, not a release
+virtudoc add /path/to/worktree --name mylib --branch
+
 # Index statistics
 virtudoc list
 
@@ -129,10 +135,14 @@ default environment, so the data directory is `~/.virtudoc` — set
 
 ## MCP tools
 
-- `find-library(libraryName, query)` — find the `local/<name>` id of a
-  library by its name and your question. Call it first.
+- `find-library(libraryName, query, projectPath=None)` — find the
+  `local/<name>` id of a library by its name and your question. Call it
+  first. The version is resolved from the project's lockfile or dependency
+  manifest, so the release the project actually uses is ranked first. If
+  that release is not indexed, the response lists the available versions
+  and tells the agent to ask the user.
 - `get-library-docs(libraryId, query, tokens=5000, language, page, mode,
-  section)` — Markdown fragments with heading paths and source file paths,
+  section, projectPath=None)` — Markdown fragments with heading paths and source file paths,
   assembled under the token budget. `total_matches` and `has_more` describe
   pagination; `page=N+1` continues the ranking. `section` restricts the
   answer to a heading branch and takes a path, e.g.
@@ -182,6 +192,10 @@ directory patterns) excludes generated or vendor trees from indexing.
   topic boost for chunks whose heading path matches the query on token
   boundaries.
 - **Indexing is incremental**: unchanged files are skipped by content hash.
+- **Versions are explicit**: each release gets its own library id
+  (`local/mylib`, `local/mylib@2.2.0`), and ranking resolves the project
+  dependency before choosing snippets. Working branches are opt-in and
+  never shadow a release.
 - All data lives in `~/.virtudoc/` (WAL-mode `index.db`, config, log).
   Deleting the directory removes the system completely.
 

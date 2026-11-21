@@ -61,6 +61,7 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
                 version=args.version,
                 description=args.description,
                 replace=args.replace,
+                channel="branch" if args.branch else args.channel,
             )
         except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -146,13 +147,17 @@ def cmd_list(args: argparse.Namespace, cfg: Config) -> int:
     if not rows:
         print("no libraries registered")
         return 0
-    header = f"{'ID':<28} {'Documents':>9} {'Chunks':>8} {'Size':>10} {'Updated':<20} Source"
+    header = (
+        f"{'ID':<28} {'Version':<10} {'Channel':<8} {'Documents':>9} {'Chunks':>8} "
+        f"{'Size':>10} {'Updated':<20} Source"
+    )
     print(header)
     for row in rows:
         size = row["index_bytes"]
         size_str = f"{size / 1024:.0f} KB" if size < 1024 * 1024 else f"{size / 1024 / 1024:.1f} MB"
         print(
-            f"{row['id']:<28} {row['doc_count']:>9} {row['chunk_count']:>8} "
+            f"{row['id']:<28} {row['version'] or '-':<10} {row['channel']:<8} "
+            f"{row['doc_count']:>9} {row['chunk_count']:>8} "
             f"{size_str:>10} {row['updated_at']:<20} {row['source_path']}"
         )
     return 0
@@ -406,6 +411,7 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
                 version=args.version,
                 description=args.repo,
                 replace=args.replace,
+                channel=args.channel,
             )
         except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -433,6 +439,8 @@ def cmd_export(args: argparse.Namespace, cfg: Config) -> int:
         lines.append(f"path = {json.dumps(row['source_path'], ensure_ascii=False)}")
         if row["version"]:
             lines.append(f"version = {json.dumps(row['version'], ensure_ascii=False)}")
+        if row["channel"] != "release":
+            lines.append(f"channel = {json.dumps(row['channel'], ensure_ascii=False)}")
         lines.append("")
     out = Path(args.path) if args.path else data_dir() / "libraries.toml"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -485,6 +493,7 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
                     chunker=chunker,
                     version=str(lib["version"]) if lib.get("version") else None,
                     replace=True,
+                    channel=str(lib.get("channel") or "release"),
                 )
             except (LibraryExistsError, ValueError, OSError, IndexLockError) as exc:
                 print(f"error: {name}: {exc}", file=sys.stderr)
@@ -508,6 +517,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", required=True, help="library name")
     p.add_argument("--version", help="documentation version")
     p.add_argument("--description", help="library description")
+    p.add_argument(
+        "--channel",
+        choices=("release", "branch"),
+        default="release",
+        help="index a release (default) or opt into a working branch",
+    )
+    p.add_argument(
+        "--branch",
+        action="store_true",
+        help="shorthand for --channel branch (a working tree, not a release)",
+    )
     p.add_argument("--replace", action="store_true", help="replace an existing library")
     p.set_defaults(func=cmd_add)
 
@@ -615,6 +635,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--branch",
         help="git branch to fetch (default: config fetch.branch, else the repo default branch)",
+    )
+    p.add_argument(
+        "--channel",
+        choices=("release", "branch"),
+        default="release",
+        help="index a release (default) or opt into a working branch",
     )
     p.add_argument("--replace", action="store_true", help="replace an existing library")
     p.set_defaults(func=cmd_fetch)
