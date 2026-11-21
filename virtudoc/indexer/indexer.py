@@ -23,6 +23,8 @@ logger = get_logger("indexer")
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+CHANNELS = ("release", "branch")
+
 
 class LibraryExistsError(Exception):
     pass
@@ -55,6 +57,20 @@ class IndexStats:
 
 def library_id(name: str) -> str:
     return f"local/{name}"
+
+
+def variant_library_id(name: str, *, version: str | None = None, channel: str = "release") -> str:
+    """Id of a non-canonical version/channel variant.
+
+    The first release keeps the stable ``local/<name>`` id. Additional
+    releases append the version (``local/<name>@2.0``) and working branches
+    carry a ``branch`` suffix so they never shadow the canonical release.
+    """
+    if channel == "branch":
+        suffix = f"{version}-branch" if version else "branch"
+    else:
+        suffix = version or "latest"
+    return f"local/{name}@{suffix}"
 
 
 _FAILURES_META_PREFIX = "index_failures:"
@@ -102,6 +118,37 @@ def validate_name(name: str) -> None:
         )
 
 
+def _family_rows(conn: sqlite3.Connection, name: str) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM libraries WHERE name = ? ORDER BY id", (name,)).fetchall()
+
+
+def _target_library_id(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    version: str | None,
+    channel: str,
+    replace: bool,
+) -> str:
+    """Pick the id for a release/version pair, keeping the canonical id stable."""
+    base_id = library_id(name)
+    base = conn.execute("SELECT * FROM libraries WHERE id = ?", (base_id,)).fetchone()
+    if replace:
+        if base is not None:
+            return base_id
+        for row in _family_rows(conn, name):
+            if (row["version"] or None) == version and row["channel"] == channel:
+                return row["id"]
+        return base_id
+    if channel != "release":
+        return variant_library_id(name, version=version, channel=channel)
+    if base is None:
+        return base_id
+    if version is not None and (base["version"] or None) != version:
+        return variant_library_id(name, version=version)
+    return base_id
+
+
 def _write_library(
     conn: sqlite3.Connection,
     source: Path,
@@ -110,12 +157,38 @@ def _write_library(
     version: str | None = None,
     description: str | None = None,
     replace: bool = False,
+    channel: str = "release",
 ) -> str:
     validate_name(name)
+    if channel not in CHANNELS:
+        raise ValueError(f"invalid channel '{channel}': use 'release' or 'branch'")
+    version = version.strip() if version and version.strip() else None
     source = Path(source).expanduser().resolve()
     if not source.is_dir():
         raise ValueError(f"source directory not found: {source}")
-    lib_id = library_id(name)
+
+    duplicate = next(
+        (
+            row
+            for row in _family_rows(conn, name)
+            if (row["version"] or None) == version and row["channel"] == channel
+        ),
+        None,
+    )
+    if duplicate is not None and not replace:
+        shown = duplicate["version"] or "unspecified"
+        raise LibraryExistsError(
+            f"library '{name}' ({channel}, version {shown}) already exists; "
+            "use --replace to overwrite"
+        )
+
+    lib_id = _target_library_id(
+        conn,
+        name,
+        version=version,
+        channel=channel,
+        replace=replace,
+    )
     row = conn.execute("SELECT id FROM libraries WHERE id = ?", (lib_id,)).fetchone()
     if row and not replace:
         raise LibraryExistsError(f"library '{lib_id}' already exists; use --replace to overwrite")
@@ -124,21 +197,21 @@ def _write_library(
         conn.execute(
             """
             UPDATE libraries
-            SET source_path = ?, description = ?, version = ?, updated_at = ?
+            SET source_path = ?, description = ?, version = ?, channel = ?, updated_at = ?
             WHERE id = ?
             """,
-            (str(source), description, version, now, lib_id),
+            (str(source), description, version, channel, now, lib_id),
         )
     else:
         conn.execute(
             """
             INSERT INTO libraries
-                (id, name, source_path, description, version, added_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, name, source_path, description, version, channel, added_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (lib_id, name, str(source), description, version, now, now),
+            (lib_id, name, str(source), description, version, channel, now, now),
         )
-    logger.info("registered library %s (%s)", lib_id, source)
+    logger.info("registered library %s (%s, %s)", lib_id, channel, version or "unversioned")
     return lib_id
 
 
@@ -150,6 +223,7 @@ def add_library(
     version: str | None = None,
     description: str | None = None,
     replace: bool = False,
+    channel: str = "release",
 ) -> str:
     lib_id = _write_library(
         conn,
@@ -158,13 +232,17 @@ def add_library(
         version=version,
         description=description,
         replace=replace,
+        channel=channel,
     )
     conn.commit()
     return lib_id
 
 
 def delete_library(conn: sqlite3.Connection, name: str) -> None:
-    lib_id = name if name.startswith("local/") else library_id(name)
+    try:
+        lib_id = get_library(conn, name)["id"]
+    except LibraryNotFoundError:
+        lib_id = name if name.startswith("local/") else library_id(name)
     delete_library_chunks_fts(conn, lib_id)
     conn.execute("DELETE FROM libraries WHERE id = ?", (lib_id,))
     conn.execute("DELETE FROM meta WHERE key = ?", (_failure_key(lib_id),))
@@ -173,17 +251,27 @@ def delete_library(conn: sqlite3.Connection, name: str) -> None:
 
 
 def get_library(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
-    lib_id = library_id(name) if not name.startswith("local/") else name
+    """Resolve a library by full id, canonical name, or a unique family name."""
+    lib_id = name if name.startswith("local/") else library_id(name)
     row = conn.execute("SELECT * FROM libraries WHERE id = ?", (lib_id,)).fetchone()
-    if row is None:
-        raise LibraryNotFoundError(f"library not found: {lib_id}")
-    return row
+    if row is not None:
+        return row
+    if not name.startswith("local/"):
+        rows = _family_rows(conn, name)
+        if len(rows) == 1:
+            return rows[0]
+        if len(rows) > 1:
+            ids = ", ".join(row["id"] for row in rows)
+            raise LibraryNotFoundError(
+                f"library name '{name}' is ambiguous ({ids}); use the full library id"
+            )
+    raise LibraryNotFoundError(f"library not found: {lib_id}")
 
 
 def list_libraries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT l.id, l.name, l.source_path, l.version, l.updated_at,
+        SELECT l.id, l.name, l.source_path, l.version, l.channel, l.updated_at,
                (SELECT COUNT(*) FROM documents d WHERE d.library_id = l.id) AS doc_count,
                (SELECT COUNT(*) FROM chunks c WHERE c.library_id = l.id) AS chunk_count,
                (SELECT COALESCE(SUM(LENGTH(c.text)), 0) FROM chunks c
@@ -325,6 +413,7 @@ def add_and_index_library(
     version: str | None = None,
     description: str | None = None,
     replace: bool = False,
+    channel: str = "release",
 ) -> tuple[str, IndexStats]:
     _begin_index(conn)
     try:
@@ -335,6 +424,7 @@ def add_and_index_library(
             version=version,
             description=description,
             replace=replace,
+            channel=channel,
         )
         stats = _index_library(conn, lib_id, chunker)
         conn.commit()

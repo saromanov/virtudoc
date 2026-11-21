@@ -12,6 +12,7 @@ from ..tokens import (
     estimate_tokens,
     truncate_to_tokens,
 )
+from ..versions import version_status
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -393,6 +394,9 @@ class LibraryMatch:
     chunk_count: int
     updated_at: str
     score: float
+    version: str | None = None
+    channel: str = "release"
+    version_status: str = "unknown"
 
 
 def resolve_libraries(
@@ -401,10 +405,17 @@ def resolve_libraries(
     query: str,
     *,
     limit: int = 5,
+    resolved_version: str | None = None,
 ) -> list[LibraryMatch]:
+    """Rank libraries for a question, preferring the project's version.
+
+    ``resolved_version`` comes from the consuming project's lockfile or
+    manifest. A matching indexed release outranks other versions of the same
+    name; an indexed working branch never outranks its release.
+    """
     rows = conn.execute(
         """
-        SELECT l.id, l.name, l.description, l.updated_at,
+        SELECT l.id, l.name, l.description, l.version, l.channel, l.updated_at,
                (SELECT COUNT(*) FROM chunks c WHERE c.library_id = l.id) AS chunk_count
         FROM libraries l
         """
@@ -426,6 +437,7 @@ def resolve_libraries(
         ):
             hits[row[0]] = row[1]
 
+    released = {row["name"] for row in rows if row["channel"] == "release"}
     needle = library_name.strip().lower()
     scored: list[tuple[float, sqlite3.Row]] = []
     for row in rows:
@@ -438,6 +450,15 @@ def resolve_libraries(
             score = difflib.SequenceMatcher(None, needle, name).ratio() if needle else 0.0
         if row["id"] in hits:
             score += min(2.0, hits[row["id"]] / 10)
+        status = version_status(row["version"], resolved_version)
+        if resolved_version:
+            if status == "match":
+                score += 3.0
+            elif status == "mismatch":
+                score -= 0.5
+        if row["channel"] != "release" and row["name"] in released:
+            # Working branches are opt-in and must not shadow a release.
+            score -= 1.0
         scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
 
@@ -450,6 +471,9 @@ def resolve_libraries(
             chunk_count=row["chunk_count"],
             updated_at=row["updated_at"],
             score=round(score, 4),
+            version=row["version"],
+            channel=row["channel"],
+            version_status=version_status(row["version"], resolved_version),
         )
         for score, row in matches[:limit]
     ]

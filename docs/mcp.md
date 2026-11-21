@@ -106,7 +106,7 @@ documentation servers can always tell which one to call.
 ### find-library
 
 ```
-find-library(libraryName: string, query: string)
+find-library(libraryName: string, query: string, projectPath: string | null)
 ```
 
 Finds the library for a question. Returns up to five candidates:
@@ -115,15 +115,36 @@ Finds the library for a question. Returns up to five candidates:
 {
   "libraries": [
     {
-      "id": "local/mylib",
+      "id": "local/mylib@2.2.0",
       "name": "mylib",
       "description": "...",
       "chunk_count": 120,
-      "updated_at": "2026-11-13T10:00:00+00:00"
+      "updated_at": "2026-11-13T10:00:00+00:00",
+      "version": "2.2.0",
+      "channel": "release",
+      "version_status": "match"
     }
-  ]
+  ],
+  "available_versions": [
+    { "id": "local/mylib", "name": "mylib", "version": "2.1.0", "channel": "release" },
+    { "id": "local/mylib@2.2.0", "name": "mylib", "version": "2.2.0", "channel": "release" }
+  ],
+  "project": {
+    "path": "/path/to/project",
+    "manifest": "/path/to/project/uv.lock",
+    "dependency_name": "mylib",
+    "dependency_version": "2.2.0"
+  }
 }
 ```
+
+The version is resolved from the project's lockfile or dependency manifest
+before ranking: lockfiles first, then direct manifests. `projectPath` is
+optional and defaults to the server working directory. The release whose
+version matches the project ranks first; working branches never outrank a
+release. When the resolved version is not indexed, the response adds
+`version_not_indexed: true` and a `message` telling the agent to ask the
+user before using another version.
 
 When nothing matches, `libraries` is empty and `message` explains how to
 register a source with `virtudoc add`.
@@ -138,7 +159,8 @@ get-library-docs(
   language: string,       // preferred code-example language (optional)
   page: int = 1,          // continuation
   mode: string = "fragments",   // or "outline"
-  section: string         // restrict to a branch, e.g. "API -> Middleware"
+  section: string,        // restrict to a branch, e.g. "API -> Middleware"
+  projectPath: string     // optional; manifest resolution (default: cwd)
 )
 ```
 
@@ -176,7 +198,13 @@ Fragments mode returns:
   [How search works](search.md#score-semantics).
 - When docs and project versions diverge (see
   [Version drift](versions.md)), the output starts with a
-  `version_mismatch` block naming both versions and the manifest.
+  `version_mismatch` block naming both versions and the manifest. Without
+  an explicit `virtudoc link`, the version is resolved from `projectPath`
+  or the server working directory. The block contains `available_versions`
+  and, when another indexed release matches, `suggested_library_id` — call
+  `get-library-docs` with that id to read the right release. If no release
+  matches, `version_not_indexed` is true and the message tells the agent to
+  ask the user.
 - When nothing matches, `snippets` is empty, `message` tells the agent not
   to answer from memory, and `sections` lists the library's top-level
   sections to help rephrase the query.

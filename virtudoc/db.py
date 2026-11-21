@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # RETURNING needs 3.35, the trigram tokenizer needs 3.34.
 MIN_SQLITE_VERSION = (3, 35, 0)
@@ -90,6 +90,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             source_path TEXT NOT NULL,
             description TEXT,
             version TEXT,
+            channel TEXT NOT NULL DEFAULT 'release',
             added_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -154,6 +155,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    library_columns = {row[1] for row in conn.execute("PRAGMA table_info(libraries)")}
+    if library_columns and "channel" not in library_columns:
+        # Libraries indexed before v5 have no channel: every one of them is a
+        # release. Working branches are opt-in and recorded explicitly.
+        conn.execute("ALTER TABLE libraries ADD COLUMN channel TEXT NOT NULL DEFAULT 'release'")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
     if columns and "lang" not in columns:
         conn.execute("ALTER TABLE chunks ADD COLUMN lang TEXT NOT NULL DEFAULT ''")

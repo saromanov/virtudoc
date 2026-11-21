@@ -29,7 +29,7 @@ def test_schema_created(conn):
         "meta",
     } <= tables
     version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "4"
+    assert version == "5"
 
 
 _V1_SCHEMA = """
@@ -79,13 +79,36 @@ def test_migrates_v1_db_adds_lang_column(home, tmp_path):
     migrated = open_db(path)
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(chunks)")}
     assert "lang" in columns
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
     version = migrated.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
-    assert version == "4"
+    assert version == "5"
     migrated.close()
 
     fresh = open_db(path)
     fresh.close()
+
+
+def test_migrates_v4_db_adds_library_channel(home, tmp_path):
+    path = tmp_path / "index.db"
+    old = sqlite3.connect(path)
+    old.executescript(_V1_SCHEMA)
+    old.execute("PRAGMA user_version=4")
+    old.execute(
+        "CREATE TABLE notes (id INTEGER PRIMARY KEY, library_id TEXT NOT NULL,"
+        " text TEXT NOT NULL, created_at TEXT NOT NULL, source_rev TEXT NOT NULL DEFAULT '')"
+    )
+    old.execute(
+        "INSERT INTO libraries (id, name, source_path, added_at, updated_at)"
+        " VALUES ('local/old', 'old', '/tmp', 't', 't')"
+    )
+    old.commit()
+    old.close()
+
+    migrated = open_db(path)
+    columns = {row[1] for row in migrated.execute("PRAGMA table_info(libraries)")}
+    assert "channel" in columns
+    assert migrated.execute("SELECT channel FROM libraries").fetchone()[0] == "release"
+    migrated.close()
 
 
 def test_migrates_v3_db_adds_notes_source_rev(home, tmp_path):
@@ -325,7 +348,7 @@ def test_init_schema_does_not_write_when_schema_is_current(tmp_path):
     connection.execute("PRAGMA query_only=ON")
     init_schema(connection)  # must not attempt any write
     row = connection.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-    assert row[0] == "4"
+    assert row[0] == "5"
 
 
 def test_init_schema_recreates_a_missing_table(tmp_path):
