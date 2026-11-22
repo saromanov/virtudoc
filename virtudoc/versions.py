@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,6 +76,39 @@ def list_manifests(project_path: Path) -> list[Path]:
     ]
 
 
+def resolve_project_versions(
+    project_path: Path, names: Iterable[str]
+) -> dict[str, ResolvedVersion]:
+    """Lockfile-first resolution of several dependencies in one manifest pass.
+
+    Every manifest is parsed at most once. The returned mapping is keyed by
+    normalized dependency name and holds only the names the project resolves;
+    the first entry of :data:`RESOLUTION_ORDER` still wins per name.
+    """
+    project_path = Path(project_path).expanduser()
+    wanted = {normalize_name(name) for name in names}
+    if not wanted or not project_path.is_dir():
+        return {}
+    manifests = {path.name: path for path in list_manifests(project_path)}
+    resolved: dict[str, ResolvedVersion] = {}
+    for name in RESOLUTION_ORDER:
+        manifest = manifests.get(name)
+        if manifest is None:
+            continue
+        dependencies = extract_dependencies(manifest)
+        for dependency in wanted - resolved.keys():
+            version = dependencies.get(dependency)
+            if version:
+                resolved[dependency] = ResolvedVersion(
+                    manifest_path=manifest,
+                    version=version,
+                    dependency_name=dependency,
+                )
+        if len(resolved) == len(wanted):
+            break
+    return resolved
+
+
 def resolve_project_version(project_path: Path, library_name: str) -> ResolvedVersion | None:
     """Resolve the version the project uses, preferring lockfiles.
 
@@ -82,23 +116,8 @@ def resolve_project_version(project_path: Path, library_name: str) -> ResolvedVe
     release; a lockfile does. When several manifests mention the dependency,
     the first entry of :data:`RESOLUTION_ORDER` wins.
     """
-    project_path = Path(project_path).expanduser()
-    if not project_path.is_dir():
-        return None
-    manifests = {path.name: path for path in list_manifests(project_path)}
     dependency = normalize_name(library_name)
-    for name in RESOLUTION_ORDER:
-        manifest = manifests.get(name)
-        if manifest is None:
-            continue
-        version = extract_dep_version(manifest, dependency)
-        if version:
-            return ResolvedVersion(
-                manifest_path=manifest,
-                version=version,
-                dependency_name=dependency,
-            )
-    return None
+    return resolve_project_versions(project_path, [dependency]).get(dependency)
 
 
 def resolve_local_dependency_version(

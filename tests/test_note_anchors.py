@@ -45,7 +45,7 @@ def test_changed_anchor_reports_reason_and_sources(conn, lib, docs_dir):
     note = note_statuses(conn, lib)[0]
     assert note.status == "stale"
     assert note.stale_reason == "anchor_changed"
-    assert note.changed_sources == ["api.md"]
+    assert note.stale_details == ["api.md"]
 
 
 def test_deleted_anchor_reports_anchor_deleted(conn, lib, docs_dir):
@@ -56,7 +56,7 @@ def test_deleted_anchor_reports_anchor_deleted(conn, lib, docs_dir):
     note = note_statuses(conn, lib)[0]
     assert note.status == "stale"
     assert note.stale_reason == "anchor_deleted"
-    assert note.changed_sources == ["api.md"]
+    assert note.stale_details == ["api.md"]
 
 
 def test_auto_anchors_ignore_unrelated_document_changes(conn, lib, docs_dir):

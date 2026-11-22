@@ -135,7 +135,7 @@ def test_stale_notes_flagged_after_source_changes(conn, lib, docs_dir):
     stale = stale_notes(conn, lib)
     assert [note.text for note in stale] == ["Use the retry helper for all outbound calls."]
     assert stale[0].stale_reason == "anchor_changed"
-    assert stale[0].changed_sources == ["api.md"]
+    assert stale[0].stale_details == ["api.md"]
 
 
 def test_note_added_after_change_is_fresh(conn, lib, docs_dir):
@@ -168,7 +168,7 @@ def test_stale_details_match_the_reason(conn, lib, docs_dir):
     payload = note_payload(note)
     assert note.stale_details == ["api.md"]
     assert payload["stale_details"] == ["api.md"]
-    assert payload["changed_sources"] == ["api.md"]
+    assert "changed_sources" not in payload
 
 
 def test_remove_note_deletes_symbols_without_foreign_keys(conn, lib, docs_dir):

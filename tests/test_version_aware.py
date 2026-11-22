@@ -268,6 +268,30 @@ def test_cli_add_explicit_version_wins_over_the_lockfile(
         assert get_library(conn, "local/demo")["version"] == "9.9.9"
 
 
+def test_cli_add_branch_ignores_the_lockfile_version(home, docs_dir, tmp_path, capsys, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "2.3.1"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(project)
+
+    assert main(["add", str(docs_dir), "--name", "demo", "--branch"]) == 0
+    captured = capsys.readouterr()
+    assert "added library local/demo@branch" in captured.out
+    assert "version pinned" not in captured.out
+
+    with open_db(Config().db_path) as conn:
+        branch = get_library(conn, "local/demo@branch")
+    assert branch["version"] is None
+
+
+def test_cli_add_branch_keeps_an_explicit_version(home, docs_dir, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo", "--branch", "--version", "9.9.9"]) == 0
+    captured = capsys.readouterr()
+    assert "added library local/demo@9.9.9-branch" in captured.out
+
+
 def test_cli_add_without_a_lockfile_stays_unversioned(
     home, docs_dir, tmp_path, capsys, monkeypatch
 ):
@@ -275,9 +299,9 @@ def test_cli_add_without_a_lockfile_stays_unversioned(
     project.mkdir()
     monkeypatch.chdir(project)
     assert main(["add", str(docs_dir), "--name", "demo"]) == 0
-    out = capsys.readouterr().out
-    assert "version pinned" not in out
-    assert "hint: pass --agents-hint" in out
+    captured = capsys.readouterr()
+    assert "version pinned" not in captured.out
+    assert "hint: pass --agents-hint" in captured.err
 
     with open_db(Config().db_path) as conn:
         assert get_library(conn, "local/demo")["version"] is None
@@ -302,6 +326,25 @@ def test_init_link_records_the_locked_version(home, docs_dir, tmp_path, capsys):
         link = get_link(conn, "local/demo")
     assert link["dep_version"] == "2.3.1"
     assert link["manifest_path"].endswith("uv.lock")
+
+
+def test_init_link_report_shows_the_locked_version(home, docs_dir, tmp_path, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo", "--version", "2.3.1"]) == 0
+    capsys.readouterr()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["demo>=2.0"]\n', encoding="utf-8"
+    )
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "1.9"\n', encoding="utf-8"
+    )
+
+    assert main(["init", str(project), "--link"]) == 0
+    out = capsys.readouterr().out
+    assert "docs 2.3.1  project 1.9" in out
+    assert "(uv.lock)" in out
+    assert "(pyproject.toml)" not in out
 
 
 def test_cli_add_agents_hint_creates_and_keeps_one_block(

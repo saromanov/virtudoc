@@ -17,10 +17,12 @@ manifests in the current directory, lockfiles first (`uv.lock`,
 `poetry.lock`, `Pipfile.lock` win over declared ranges in
 `pyproject.toml`, `package.json`, `requirements.txt`, `go.mod`); a pinned
 version is reported as `version pinned from <manifest>: <version>`. An
-explicit `--version` always wins and skips the lookup. The first
-release gets the canonical id `local/<name>`; another release of the same
-name gets `local/<name>@<version>`, so several releases can be indexed side
-by side. A working branch is opt-in: `--channel branch` (or the `--branch`
+explicit `--version` always wins and skips the lookup. A branch add never
+auto-resolves a version: without an explicit `--version` it keeps the
+`local/<name>@branch` id whatever lockfile the current directory holds.
+The first release gets the canonical id `local/<name>`; another release of the
+same name gets `local/<name>@<version>`, so several releases can be indexed
+side by side. A working branch is opt-in: `--channel branch` (or the `--branch`
 shorthand) registers it as `local/<name>@branch` and it never outranks a
 release. Names must be lowercase latin with digits, hyphens and
 underscores. On a name conflict the command fails without changes; pass
@@ -29,8 +31,10 @@ underscores. On a name conflict the command fails without changes; pass
 `--agents-hint` writes a short recommendation block to `AGENTS.md` in the
 current directory (created if missing; `CLAUDE.md` is used when it exists and
 `AGENTS.md` does not). The block tells the agent to call `find-library` and
-`get-library-docs` before writing code against a library. It is idempotent: a
-file that already mentions virtudoc is left untouched.
+`get-library-docs` before writing code against a library. It is idempotent: the
+block carries a unique `virtudoc:agents-hint` marker, and a file that already
+holds it is left untouched. An unreadable or unwritable target fails with an
+error instead of a traceback.
 
 ## update — incremental reindexing
 
@@ -147,7 +151,8 @@ libraries — the version is resolved lockfile first, so a dependency declared
 as a range but locked to an exact release records the locked version and the
 lockfile path. `path` defaults to the current directory. Pass
 `--agents-hint` to write the virtudoc recommendation block to the project's
-`AGENTS.md` (see `add`).
+`AGENTS.md` (see `add`). The block is written only after a successful scan: a
+directory that holds no supported manifest fails without writing anything.
 
 Exit code is `0` when the scan succeeds (drift is reported, not treated as a
 failure) and `1` when the directory is missing or holds no supported

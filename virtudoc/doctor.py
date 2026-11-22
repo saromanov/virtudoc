@@ -138,7 +138,7 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                         f"(limit {limit}): split this note"
                     )
             for note in stale:
-                detail = ", ".join(note.missing_symbols or note.changed_sources[:5])
+                detail = ", ".join(note.missing_symbols or note.stale_details[:5])
                 suffix = f": {detail}" if detail else ""
                 result.warning(
                     f"{lib['name']}: note #{note.id} is stale "

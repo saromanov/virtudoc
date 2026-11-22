@@ -10,7 +10,7 @@ from .versions import (
     link_library,
     list_manifests,
     normalize_name,
-    resolve_project_version,
+    resolve_project_versions,
     version_status,
 )
 
@@ -99,8 +99,11 @@ def link_matches(conn: sqlite3.Connection, scan: ProjectScan) -> tuple[list[Link
     """
     linked: list[LinkResult] = []
     errors: list[str] = []
+    resolved_versions = resolve_project_versions(
+        scan.project_path, [match.library_name for match in scan.matches]
+    )
     for match in scan.matches:
-        resolved = resolve_project_version(scan.project_path, match.library_name)
+        resolved = resolved_versions.get(normalize_name(match.library_name))
         manifest = resolved.manifest_path if resolved is not None else match.dependency.manifest
         try:
             info = link_library(
@@ -132,13 +135,21 @@ def format_report(scan: ProjectScan, linked: list[LinkResult], link_requested: b
     lines.append("")
 
     if scan.matches:
+        # With --link the locked version and manifest are what actually got
+        # recorded, so report those instead of the scan's declared values.
+        linked_by_id = {link.library_id: link for link in linked}
         lines.append("matched libraries:")
         for match in scan.matches:
             dep_version = match.dependency.version or "unknown"
             doc_version = match.doc_version or "unknown"
+            manifest = match.dependency.manifest
+            link = linked_by_id.get(match.library_id) if link_requested else None
+            if link is not None:
+                dep_version = link.dep_version
+                manifest = link.manifest_path
             lines.append(
                 f"  {match.library_id}  docs {doc_version}  project {dep_version}  "
-                f"{match.status}  ({match.dependency.manifest.name})"
+                f"{match.status}  ({manifest.name})"
             )
     else:
         lines.append("matched libraries: none")

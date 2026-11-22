@@ -92,8 +92,8 @@ response. `stale_details` holds up to five items, chosen by the reason:
 | `version_differs` | `origin_library_id` |
 | `library_changed` | `[]` |
 
-`changed_sources` is kept for one release as a deprecated alias of
-`stale_details`; it will be removed in v0.4.0.
+The deprecated `changed_sources` alias of `stale_details` was removed in
+v0.4.0; read `stale_details` only.
 
 If a query mentions an identifier the docs never had, the payload adds
 `missing_identifiers`, and notes that mention such an identifier carry

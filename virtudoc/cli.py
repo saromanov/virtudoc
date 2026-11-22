@@ -74,15 +74,24 @@ def _print_skipped(skipped_files: list[str]) -> None:
         print(f"  ! skipped (over 5 MB): {rel_path}", file=sys.stderr)
 
 
-def _print_agents_hint(project: Path) -> None:
-    path, changed = ensure_agents_hint(project)
+def _print_agents_hint(project: Path) -> bool:
+    """Write the agents hint, reporting failures on stderr; True on success."""
+    try:
+        path, changed = ensure_agents_hint(project)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return False
     state = "written to" if changed else "already present in"
     print(f"agents hint {state} {path}")
+    return True
 
 
 def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
+    channel = "branch" if args.branch else args.channel
     version, version_source = args.version, None
-    if version is None:
+    # Branch adds carry no release version: a lockfile in the working directory
+    # must not turn `local/<name>@branch` into `local/<name>@<version>-branch`.
+    if version is None and channel == "release":
         version, version_source = resolve_local_dependency_version(Path.cwd(), args.name)
     with _open(cfg) as conn:
         try:
@@ -94,7 +103,7 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
                 version=version,
                 description=args.description,
                 replace=args.replace,
-                channel="branch" if args.branch else args.channel,
+                channel=channel,
             )
         except (LibraryExistsError, ValueError, IndexLockError) as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -105,9 +114,13 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
     print(stats.summary())
     _print_skipped(stats.skipped_files)
     if args.agents_hint:
-        _print_agents_hint(Path.cwd())
+        if not _print_agents_hint(Path.cwd()):
+            return 1
     else:
-        print("hint: pass --agents-hint to add the virtudoc rule to AGENTS.md")
+        print(
+            "hint: pass --agents-hint to add the virtudoc rule to AGENTS.md",
+            file=sys.stderr,
+        )
     return 0 if stats.errors == 0 else 1
 
 
@@ -130,8 +143,8 @@ def cmd_init(args: argparse.Namespace, cfg: Config) -> int:
         print(line)
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
-    if args.agents_hint:
-        _print_agents_hint(project)
+    if args.agents_hint and not _print_agents_hint(project):
+        return 1
     return 1 if errors else 0
 
 
@@ -384,7 +397,7 @@ def cmd_note_add(args: argparse.Namespace, cfg: Config) -> int:
 def _anchor_summary(note, anchors: list[sqlite3.Row]) -> str:
     parts = []
     for anchor in anchors:
-        suffix = " (chg)" if anchor["rel_path"] in note.changed_sources else ""
+        suffix = " (chg)" if anchor["rel_path"] in note.stale_details else ""
         parts.append(f"{anchor['rel_path']}{suffix}")
     for symbol in note.symbols:
         if symbol in note.missing_symbols:

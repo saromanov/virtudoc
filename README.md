@@ -40,9 +40,10 @@ through OIDC trusted publishing — no tokens are stored in the repository.
 
 ```bash
 # Register a documentation directory and index it
-# (--version is optional: without it the version is pinned from the project's
-# lockfile when the dependency is declared there; --agents-hint writes the
-# MCP rule to AGENTS.md or CLAUDE.md)
+# (--version is optional: without it a release add is pinned from the project's
+# lockfiles when one of them pins the dependency, direct or transitive; loose
+# manifests only match declared entries. --agents-hint writes the MCP rule to
+# AGENTS.md or CLAUDE.md)
 virtudoc add /path/to/docs --name mylib --version 2.1.0 --agents-hint
 
 # Index another release of the same library (different id: local/mylib@2.2.0)

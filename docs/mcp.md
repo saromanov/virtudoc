@@ -183,7 +183,6 @@ Fragments mode returns:
       "status": "stale",
       "stale_reason": "symbol_removed",
       "stale_details": ["issueLegacyToken"],
-      "changed_sources": ["issueLegacyToken"],
       "missing_symbols": ["issueLegacyToken"]
     }
   ],

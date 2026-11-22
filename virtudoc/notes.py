@@ -69,7 +69,6 @@ class Note:
     status: str = STATUS_UNKNOWN
     stale_reason: str | None = None
     stale_details: list[str] = field(default_factory=list)
-    changed_sources: list[str] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)
     missing_symbols: list[str] = field(default_factory=list)
     mentions_missing: list[str] = field(default_factory=list)
@@ -453,7 +452,7 @@ def _describe_status(
     symbols: list[Identifier],
     checker: IdentifierChecker,
 ) -> None:
-    """Set status, stale_reason, stale_details and changed_sources in place."""
+    """Set status, stale_reason and stale_details in place."""
     note.symbols = [spec.name for spec in symbols]
     if note.anchor_kind == ANCHOR_NONE:
         note.status = STATUS_UNKNOWN
@@ -465,7 +464,6 @@ def _describe_status(
         note.stale_reason = "symbol_removed"
         note.missing_symbols = missing_symbols
         note.stale_details = missing_symbols[:5]
-        note.changed_sources = note.stale_details
         return
 
     variant_anchors = [a for a in anchors if a["library_id"] == variant_id]
@@ -484,7 +482,6 @@ def _describe_status(
             note.status = STATUS_STALE
             note.stale_reason = "anchor_deleted" if deleted else "anchor_changed"
             note.stale_details = changed[:5]
-            note.changed_sources = note.stale_details
         else:
             note.status = STATUS_CURRENT
         return
@@ -501,7 +498,6 @@ def _describe_status(
             note.status = STATUS_STALE
             note.stale_reason = "version_differs"
             note.stale_details = [note.origin_library_id][:5]
-            note.changed_sources = note.stale_details
         else:
             note.status = STATUS_CURRENT
         return
@@ -877,7 +873,6 @@ def note_payload(note: Note) -> dict:
         "status": note.status,
         "stale_reason": note.stale_reason,
         "stale_details": note.stale_details,
-        "changed_sources": note.changed_sources,
         "reviewed_at": note.reviewed_or_created,
         "pinned": note.pinned,
         "scope_version": note.scope_version,

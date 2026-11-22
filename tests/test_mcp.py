@@ -851,7 +851,8 @@ async def test_get_library_docs_reports_stale_notes_first(home_index):
     note = payload["notes"][0]
     assert note["status"] == "stale"
     assert note["stale_reason"] == "anchor_changed"
-    assert note["changed_sources"] == ["api.md"]
+    assert note["stale_details"] == ["api.md"]
+    assert "changed_sources" not in note
 
 
 @pytest.mark.anyio
