@@ -101,6 +101,20 @@ def resolve_project_version(project_path: Path, library_name: str) -> ResolvedVe
     return None
 
 
+def resolve_local_dependency_version(
+    project_dir: Path, library_name: str
+) -> tuple[str | None, str | None]:
+    """Version the project pins for a dependency, with its source manifest name.
+
+    Returns ``(version, manifest_name)`` or ``(None, None)`` when the project
+    does not mention the dependency. Lockfiles win over declared ranges.
+    """
+    resolved = resolve_project_version(project_dir, library_name)
+    if resolved is None:
+        return None, None
+    return resolved.version, resolved.manifest_path.name
+
+
 def library_version_choices(conn: sqlite3.Connection, name_or_id: str) -> list[dict]:
     """Indexed releases and branches of one library name, with their ids."""
     name = name_or_id.rsplit("/", 1)[-1].split("@", 1)[0]

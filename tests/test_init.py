@@ -52,6 +52,19 @@ def test_init_links_only_with_explicit_flag(home, docs_dir, tmp_path, capsys):
     assert link["manifest_path"].endswith("requirements.txt")
 
 
+def test_init_agents_hint_writes_the_project_file(home, docs_dir, tmp_path, capsys):
+    _add_demo(home, docs_dir)
+    capsys.readouterr()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo==2.0.0\n", encoding="utf-8")
+
+    assert main(["init", str(project), "--agents-hint"]) == 0
+    out = capsys.readouterr().out
+    assert f"agents hint written to {project / 'AGENTS.md'}" in out
+    assert "find-library" in (project / "AGENTS.md").read_text(encoding="utf-8")
+
+
 def test_init_scans_every_manifest(home, docs_dir, tmp_path, capsys):
     _add_demo(home, docs_dir, version="2.0.0")
     capsys.readouterr()

@@ -40,7 +40,10 @@ through OIDC trusted publishing — no tokens are stored in the repository.
 
 ```bash
 # Register a documentation directory and index it
-virtudoc add /path/to/docs --name mylib --version 2.1.0
+# (--version is optional: without it the version is pinned from the project's
+# lockfile when the dependency is declared there; --agents-hint writes the
+# MCP rule to AGENTS.md or CLAUDE.md)
+virtudoc add /path/to/docs --name mylib --version 2.1.0 --agents-hint
 
 # Index another release of the same library (different id: local/mylib@2.2.0)
 virtudoc add /path/to/docs-2.2 --name mylib --version 2.2.0
@@ -135,6 +138,10 @@ default environment, so the data directory is `~/.virtudoc` — set
   }
 }
 ```
+
+`virtudoc add <path> --name <name> --agents-hint` writes a short rule to the
+project's `AGENTS.md` (or `CLAUDE.md`) that tells the agent to call
+`find-library` and `get-library-docs` before writing code.
 
 ## MCP tools
 

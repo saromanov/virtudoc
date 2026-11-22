@@ -8,6 +8,7 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
+from .agents_hint import ensure_agents_hint
 from .config import DATA_DIR_ENV, Config, data_dir
 from .coverage import extract_identifiers
 from .db import UnsupportedSQLiteError, open_db
@@ -46,7 +47,12 @@ from .notes import (
 from .onboarding import format_report, link_matches, scan_project
 from .search.engine import library_outline, search
 from .tokens import estimate_tokens
-from .versions import MANIFEST_CANDIDATES, link_library, unlink_library
+from .versions import (
+    MANIFEST_CANDIDATES,
+    link_library,
+    resolve_local_dependency_version,
+    unlink_library,
+)
 
 
 def _chunker_from_config(cfg: Config) -> Chunker:
@@ -68,7 +74,16 @@ def _print_skipped(skipped_files: list[str]) -> None:
         print(f"  ! skipped (over 5 MB): {rel_path}", file=sys.stderr)
 
 
+def _print_agents_hint(project: Path) -> None:
+    path, changed = ensure_agents_hint(project)
+    state = "written to" if changed else "already present in"
+    print(f"agents hint {state} {path}")
+
+
 def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
+    version, version_source = args.version, None
+    if version is None:
+        version, version_source = resolve_local_dependency_version(Path.cwd(), args.name)
     with _open(cfg) as conn:
         try:
             lib_id, stats = add_and_index_library(
@@ -76,7 +91,7 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
                 Path(args.path),
                 args.name,
                 chunker=_chunker_from_config(cfg),
-                version=args.version,
+                version=version,
                 description=args.description,
                 replace=args.replace,
                 channel="branch" if args.branch else args.channel,
@@ -85,8 +100,14 @@ def cmd_add(args: argparse.Namespace, cfg: Config) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
     print(f"added library {lib_id}")
+    if version_source is not None:
+        print(f"version pinned from {version_source}: {version}")
     print(stats.summary())
     _print_skipped(stats.skipped_files)
+    if args.agents_hint:
+        _print_agents_hint(Path.cwd())
+    else:
+        print("hint: pass --agents-hint to add the virtudoc rule to AGENTS.md")
     return 0 if stats.errors == 0 else 1
 
 
@@ -109,6 +130,8 @@ def cmd_init(args: argparse.Namespace, cfg: Config) -> int:
         print(line)
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
+    if args.agents_hint:
+        _print_agents_hint(project)
     return 1 if errors else 0
 
 
@@ -789,7 +812,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("add", help="register a source and run the first indexing")
     p.add_argument("path", help="path to the documentation directory")
     p.add_argument("--name", required=True, help="library name")
-    p.add_argument("--version", help="documentation version")
+    p.add_argument(
+        "--version",
+        help="documentation version (default: resolved from the project's dependency manifests)",
+    )
     p.add_argument("--description", help="library description")
     p.add_argument(
         "--channel",
@@ -803,6 +829,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="shorthand for --channel branch (a working tree, not a release)",
     )
     p.add_argument("--replace", action="store_true", help="replace an existing library")
+    p.add_argument(
+        "--agents-hint",
+        action="store_true",
+        help="add the virtudoc recommendation block to AGENTS.md (or CLAUDE.md)",
+    )
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser(
@@ -814,6 +845,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--link",
         action="store_true",
         help="link matched libraries to the project (off by default)",
+    )
+    p.add_argument(
+        "--agents-hint",
+        action="store_true",
+        help="add the virtudoc recommendation block to the project's AGENTS.md",
     )
     p.set_defaults(func=cmd_init)
 

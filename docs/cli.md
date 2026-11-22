@@ -8,9 +8,16 @@ on success and non-zero on error, so the CLI is scriptable.
 ```bash
 virtudoc add <path> --name <name> [--version V] [--description TEXT]
                     [--channel release|branch] [--branch] [--replace]
+                    [--agents-hint]
 ```
 
-Registers the directory as a library and runs the first indexing. The first
+Registers the directory as a library and runs the first indexing. When
+`--version` is omitted, the version is resolved from the project's dependency
+manifests in the current directory, lockfiles first (`uv.lock`,
+`poetry.lock`, `Pipfile.lock` win over declared ranges in
+`pyproject.toml`, `package.json`, `requirements.txt`, `go.mod`); a pinned
+version is reported as `version pinned from <manifest>: <version>`. An
+explicit `--version` always wins and skips the lookup. The first
 release gets the canonical id `local/<name>`; another release of the same
 name gets `local/<name>@<version>`, so several releases can be indexed side
 by side. A working branch is opt-in: `--channel branch` (or the `--branch`
@@ -18,6 +25,12 @@ shorthand) registers it as `local/<name>@branch` and it never outranks a
 release. Names must be lowercase latin with digits, hyphens and
 underscores. On a name conflict the command fails without changes; pass
 `--replace` to overwrite an existing library.
+
+`--agents-hint` writes a short recommendation block to `AGENTS.md` in the
+current directory (created if missing; `CLAUDE.md` is used when it exists and
+`AGENTS.md` does not). The block tells the agent to call `find-library` and
+`get-library-docs` before writing code against a library. It is idempotent: a
+file that already mentions virtudoc is left untouched.
 
 ## update — incremental reindexing
 
@@ -116,7 +129,7 @@ symbol anchor disappeared unless `--reanchor` is passed. See
 ## init — project onboarding
 
 ```bash
-virtudoc init [path] [--link]
+virtudoc init [path] [--link] [--agents-hint]
 ```
 
 Scans every supported dependency manifest in the project directory
@@ -130,9 +143,11 @@ register their documentation; long lists are truncated.
 
 The command is read-only by default and never prompts, so it is safe in
 scripts and CI. Pass `--link` to create the project links for the matched
-libraries — the manifest where each dependency was found is recorded, so a
-dependency present only in a lockfile still links correctly. `path` defaults
-to the current directory.
+libraries — the version is resolved lockfile first, so a dependency declared
+as a range but locked to an exact release records the locked version and the
+lockfile path. `path` defaults to the current directory. Pass
+`--agents-hint` to write the virtudoc recommendation block to the project's
+`AGENTS.md` (see `add`).
 
 Exit code is `0` when the scan succeeds (drift is reported, not treated as a
 failure) and `1` when the directory is missing or holds no supported

@@ -10,6 +10,7 @@ from .versions import (
     link_library,
     list_manifests,
     normalize_name,
+    resolve_project_version,
     version_status,
 )
 
@@ -91,16 +92,22 @@ def scan_project(conn: sqlite3.Connection, project_path: Path) -> ProjectScan:
 
 
 def link_matches(conn: sqlite3.Connection, scan: ProjectScan) -> tuple[list[LinkResult], list[str]]:
-    """Opt-in linking of every matched library to the manifest it was found in."""
+    """Opt-in linking of every matched library to the manifest it was found in.
+
+    The lockfile-first resolution decides the recorded manifest and version;
+    the scan's manifest is only a fallback when no manifest resolves it.
+    """
     linked: list[LinkResult] = []
     errors: list[str] = []
     for match in scan.matches:
+        resolved = resolve_project_version(scan.project_path, match.library_name)
+        manifest = resolved.manifest_path if resolved is not None else match.dependency.manifest
         try:
             info = link_library(
                 conn,
                 match.library_id,
                 scan.project_path,
-                manifest=match.dependency.manifest,
+                manifest=manifest,
             )
         except ValueError as exc:
             errors.append(f"{match.library_id}: {exc}")

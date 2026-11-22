@@ -261,7 +261,7 @@ before spending tokens. `section` works in both modes.
 ## Suggested agent rules
 
 Add a line to your project's `AGENTS.md` / `CLAUDE.md` to make usage
-systematic:
+systematic. `virtudoc add --agents-hint` writes it for you (idempotently):
 
 > When working with `<library>`, resolve its id with `find-library`
 > and fetch current docs with `get-library-docs` before writing code. Use

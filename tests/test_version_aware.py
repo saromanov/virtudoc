@@ -19,6 +19,7 @@ from virtudoc.indexer.indexer import (
 from virtudoc.mcp_server import build_server
 from virtudoc.search.engine import resolve_libraries
 from virtudoc.versions import (
+    get_link,
     library_version_choices,
     mismatch_payload,
     resolve_project_version,
@@ -233,6 +234,123 @@ def test_cli_add_opt_in_branch(home, docs_dir, capsys):
     assert main(["list"]) == 0
     out = capsys.readouterr().out
     assert "branch" in out
+
+
+def test_cli_add_pins_the_version_from_the_lockfile(home, docs_dir, tmp_path, capsys, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "2.3.1"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(project)
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "version pinned from uv.lock: 2.3.1" in out
+
+    with open_db(Config().db_path) as conn:
+        assert get_library(conn, "local/demo")["version"] == "2.3.1"
+
+
+def test_cli_add_explicit_version_wins_over_the_lockfile(
+    home, docs_dir, tmp_path, capsys, monkeypatch
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "2.3.1"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(project)
+    assert main(["add", str(docs_dir), "--name", "demo", "--version", "9.9.9"]) == 0
+    out = capsys.readouterr().out
+    assert "version pinned" not in out
+
+    with open_db(Config().db_path) as conn:
+        assert get_library(conn, "local/demo")["version"] == "9.9.9"
+
+
+def test_cli_add_without_a_lockfile_stays_unversioned(
+    home, docs_dir, tmp_path, capsys, monkeypatch
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    out = capsys.readouterr().out
+    assert "version pinned" not in out
+    assert "hint: pass --agents-hint" in out
+
+    with open_db(Config().db_path) as conn:
+        assert get_library(conn, "local/demo")["version"] is None
+
+
+def test_init_link_records_the_locked_version(home, docs_dir, tmp_path, capsys):
+    assert main(["add", str(docs_dir), "--name", "demo", "--version", "2.3.1"]) == 0
+    capsys.readouterr()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["demo>=2.0"]\n', encoding="utf-8"
+    )
+    (project / "uv.lock").write_text(
+        '[[package]]\nname = "demo"\nversion = "2.3.1"\n', encoding="utf-8"
+    )
+
+    assert main(["init", str(project), "--link"]) == 0
+    out = capsys.readouterr().out
+    assert "2.3.1" in out
+    with open_db(Config().db_path) as conn:
+        link = get_link(conn, "local/demo")
+    assert link["dep_version"] == "2.3.1"
+    assert link["manifest_path"].endswith("uv.lock")
+
+
+def test_cli_add_agents_hint_creates_and_keeps_one_block(
+    home, docs_dir, tmp_path, capsys, monkeypatch
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text("# Notes\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    assert main(["add", str(docs_dir), "--name", "demo", "--agents-hint"]) == 0
+    out = capsys.readouterr().out
+    claude = project / "CLAUDE.md"
+    assert f"agents hint written to {claude}" in out
+    assert "find-library" in claude.read_text(encoding="utf-8")
+    assert not (project / "AGENTS.md").exists()
+
+    assert main(["add", str(docs_dir), "--name", "demo", "--agents-hint", "--replace"]) == 0
+    out = capsys.readouterr().out
+    assert f"agents hint already present in {claude}" in out
+    assert claude.read_text(encoding="utf-8").count("find-library") == 1
+
+
+def test_cli_add_agents_hint_creates_agents_md(home, docs_dir, tmp_path, capsys, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+
+    assert main(["add", str(docs_dir), "--name", "demo", "--agents-hint"]) == 0
+    out = capsys.readouterr().out
+    agents = project / "AGENTS.md"
+    assert f"agents hint written to {agents}" in out
+    text = agents.read_text(encoding="utf-8")
+    assert "find-library" in text
+    assert "get-library-docs" in text
+
+
+def test_cli_add_agents_hint_appends_to_an_existing_agents_md(
+    home, docs_dir, tmp_path, capsys, monkeypatch
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "AGENTS.md").write_text("# Rules\n\nBe concise.\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    assert main(["add", str(docs_dir), "--name", "demo", "--agents-hint"]) == 0
+    text = (project / "AGENTS.md").read_text(encoding="utf-8")
+    assert text.startswith("# Rules\n\nBe concise.\n")
+    assert text.count("find-library") == 1
 
 
 def test_init_picks_the_version_matching_the_project(conn, docs_dir, tmp_path):
