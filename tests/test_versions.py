@@ -12,6 +12,7 @@ from virtudoc.versions import (
     link_library,
     list_manifests,
     mismatch_payload,
+    resolve_project_version,
     unlink_library,
     version_status,
 )
@@ -68,6 +69,7 @@ def test_extract_from_requirements(tmp_path):
         ("package.json", "[]"),
         ("pyproject.toml", 'project = "not-a-table"\n'),
         ("Pipfile.lock", '{"default": []}'),
+        ("conan.lock", "{not json"),
     ],
 )
 def test_malformed_manifest_yields_empty_mapping(tmp_path, filename, content):
@@ -372,3 +374,170 @@ def test_normalize_name_follows_pep_503():
     assert normalize_name("Demo_Tool") == "demo-tool"
     assert normalize_name("a..b") == "a-b"
     assert normalize_name("@scope/pkg") == "@scope/pkg"
+
+
+def test_detect_manifest_prefers_conan_lock(tmp_path):
+    (tmp_path / "conanfile.py").write_text("requires = ()\n", encoding="utf-8")
+    assert detect_manifest(tmp_path).name == "conanfile.py"
+    (tmp_path / "conan.lock").write_text('{"version": "0.5"}\n', encoding="utf-8")
+    assert detect_manifest(tmp_path).name == "conan.lock"
+
+
+def test_extract_from_conan_lock(tmp_path):
+    manifest = tmp_path / "conan.lock"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": "0.5",
+                "requires": [
+                    "fmt/7.1.3#3f2a1b%1690000000",
+                    "mongoose.proto.licenseplate/3.0.19"
+                    "@mongoose+protobuf-schemas+licenseplate_schema/proto",
+                    "zlib/1.2.13",
+                    "openssl/[>=1.2 <2]@user/channel",
+                ],
+                "build_requires": ["cmake/3.20.0"],
+                "python_requires": ["conan-tools/1.0.0@user/channel"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {
+        "fmt": "7.1.3",
+        "mongoose-proto-licenseplate": "3.0.19",
+        "zlib": "1.2.13",
+        "openssl": "1.2",
+        "cmake": "3.20.0",
+        "conan-tools": "1.0.0",
+    }
+    assert extract_dep_version(manifest, "absent") is None
+
+
+def test_extract_from_conan_lock_graph_lock_nodes(tmp_path):
+    manifest = tmp_path / "conan.lock"
+    manifest.write_text(
+        json.dumps(
+            {
+                "graph_lock": {
+                    "nodes": {
+                        "0": {"ref": "app/1.0.0", "path": "conanfile.py", "requires": ["1"]},
+                        "1": {"ref": "fmt/7.1.3#rrev", "requires": ["2"]},
+                        "2": {"ref": "zlib/1.2.13"},
+                    }
+                },
+                "version": "0.4",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {"fmt": "7.1.3", "zlib": "1.2.13"}
+
+
+def test_extract_from_conanfile_py_requires_attribute(tmp_path):
+    manifest = tmp_path / "conanfile.py"
+    manifest.write_text(
+        '''
+from conans import ConanFile
+
+
+class DemoConan(ConanFile):
+    settings = "os"
+    requires = (
+        "mongoose.proto.licenseplate/3.0.19@mongoose/proto",
+        "fmt/7.1.3",
+        "mongoose.cpp-style-guide/0.0.2@mongoose+cpp-style-guide/config"
+    )
+
+    generators = "cmake", "gcc"
+''',
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {
+        "mongoose-proto-licenseplate": "3.0.19",
+        "fmt": "7.1.3",
+        "mongoose-cpp-style-guide": "0.0.2",
+    }
+
+
+def test_extract_from_conanfile_py_single_requires_string(tmp_path):
+    manifest = tmp_path / "conanfile.py"
+    manifest.write_text(
+        'from conan import ConanFile\n\n\nclass Demo(ConanFile):\n    requires = "fmt/7.1.3"\n',
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {"fmt": "7.1.3"}
+
+
+def test_extract_from_conanfile_py_self_requires(tmp_path):
+    manifest = tmp_path / "conanfile.py"
+    manifest.write_text(
+        """
+from conan import ConanFile
+
+
+class Demo(ConanFile):
+    def requirements(self):
+        self.requires("fmt/8.1.1")
+        self.requires("zlib/1.2.13@user/channel")
+""",
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {"fmt": "8.1.1", "zlib": "1.2.13"}
+
+
+def test_extract_from_conanfile_txt(tmp_path):
+    manifest = tmp_path / "conanfile.txt"
+    manifest.write_text(
+        """
+[requires]
+fmt/7.1.3
+
+# zlib/1.2.11
+
+zlib/1.2.13@user/channel
+[generators]
+cmake
+""",
+        encoding="utf-8",
+    )
+    assert extract_dependencies(manifest) == {"fmt": "7.1.3", "zlib": "1.2.13"}
+
+
+def test_conan_lock_wins_over_conanfile_py(tmp_path):
+    project = tmp_path / "conanproject"
+    project.mkdir()
+    (project / "conanfile.py").write_text(
+        'from conan import ConanFile\n\n\nclass Demo(ConanFile):\n    requires = "fmt/8.1.1"\n',
+        encoding="utf-8",
+    )
+    (project / "conan.lock").write_text(
+        json.dumps({"version": "0.5", "requires": ["fmt/7.1.3#rrev"]}),
+        encoding="utf-8",
+    )
+    resolved = resolve_project_version(project, "fmt")
+    assert resolved is not None
+    assert resolved.version == "7.1.3"
+    assert resolved.manifest_path.name == "conan.lock"
+
+
+def test_resolve_project_version_from_conanfile_py(tmp_path):
+    project = tmp_path / "conanproject"
+    project.mkdir()
+    (project / "conanfile.py").write_text(
+        """
+from conans import ConanFile
+
+
+class VehicleDetectorConan(ConanFile):
+    requires = (
+        "mongoose.cpp-libs.rabbitmq-lib/2.0.3@mongoose/stable",
+        "mongoose.proto.licenseplate/3.0.19@mongoose/proto",
+    )
+""",
+        encoding="utf-8",
+    )
+    resolved = resolve_project_version(project, "mongoose.proto.licenseplate")
+    assert resolved is not None
+    assert resolved.version == "3.0.19"
+    assert resolved.manifest_path.name == "conanfile.py"
+    assert resolve_project_version(project, "mongoose.cpp-libs.tracking") is None

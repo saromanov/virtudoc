@@ -12,12 +12,15 @@ virtudoc link mylib --project /path/to/consuming/project
 
 The command:
 
-1. Finds the project's dependency manifest — `pyproject.toml`,
-   `package.json`, `requirements.txt`, `go.mod`, `uv.lock`, `poetry.lock`
-   or `Pipfile.lock`. Lockfiles are consulted first: they record the exact
-   installed release, while a direct manifest may only declare a range.
+1. Finds the project's dependency manifest — `conan.lock`, `pyproject.toml`,
+   `package.json`, `requirements.txt`, `go.mod`, `conanfile.py`,
+   `conanfile.txt`, `uv.lock`, `poetry.lock` or `Pipfile.lock`. Lockfiles are
+   consulted first: they record the exact installed release, while a direct
+   manifest may only declare a range.
    Poetry-style `[tool.poetry.dependencies]` in `pyproject.toml` is
-   recognized too.
+   recognized too. Conan references such as
+   `name/version@user/channel` are supported, including revisions
+   (`#rrev`), timestamps (`%timestamp`) and version ranges (`[>=1.2 <2]`).
 2. Locates the dependency by the library name (matching is
    case-insensitive; underscores and hyphens are treated as equivalent).
 3. Records the expected version in the index.

@@ -11,10 +11,13 @@ from pathlib import Path
 from .db import utc_now
 
 MANIFEST_CANDIDATES = (
+    "conan.lock",
     "pyproject.toml",
     "package.json",
     "requirements.txt",
     "go.mod",
+    "conanfile.py",
+    "conanfile.txt",
     "uv.lock",
     "poetry.lock",
     "Pipfile.lock",
@@ -23,6 +26,10 @@ MANIFEST_CANDIDATES = (
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
 _REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 _GO_MOD_RE = re.compile(r"^\s*(?:require\s+)?([^\s]+)\s+(v?\d+(?:\.\d+)+[^\s]*)")
+_CONAN_KEYS = ("requires", "build_requires", "python_requires")
+_CONAN_PY_REQUIRES_RE = re.compile(r"\brequires\s*=\s*")
+_CONAN_PY_SELF_REQUIRES_RE = re.compile(r"self\.requires\s*\(([^)]*)\)")
+_CONAN_QUOTED_RE = re.compile(r"""["']([^"']+)["']""")
 
 
 @dataclass
@@ -43,6 +50,7 @@ class ResolvedVersion:
 # Lockfiles resolve exact versions, so they win over declared ranges in a
 # direct manifest. The order follows `detect_manifest`, with lockfiles first.
 RESOLUTION_ORDER = (
+    "conan.lock",
     "uv.lock",
     "poetry.lock",
     "Pipfile.lock",
@@ -50,6 +58,8 @@ RESOLUTION_ORDER = (
     "package.json",
     "requirements.txt",
     "go.mod",
+    "conanfile.py",
+    "conanfile.txt",
 )
 
 
@@ -210,6 +220,12 @@ def extract_dependencies(manifest_path: Path) -> dict[str, str | None]:
             return _deps_from_package_lock(manifest_path)
         if manifest_path.name == "Pipfile.lock":
             return _deps_from_pipfile_lock(manifest_path)
+        if manifest_path.name == "conan.lock":
+            return _deps_from_conan_lock(manifest_path)
+        if manifest_path.name == "conanfile.py":
+            return _deps_from_conanfile_py(manifest_path)
+        if manifest_path.name == "conanfile.txt":
+            return _deps_from_conanfile_txt(manifest_path)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, tomllib.TOMLDecodeError):
         return {}
     return {}
@@ -311,6 +327,85 @@ def _deps_from_pipfile_lock(path: Path) -> dict[str, str | None]:
         for dep, info in data.get(section, {}).items():
             spec = info.get("version") if isinstance(info, dict) else None
             deps[normalize_name(dep)] = _match_version(spec)
+    return deps
+
+
+def _parse_conan_ref(ref: str) -> tuple[str, str] | None:
+    """Split ``name/version@user/channel#rrev%timestamp`` into name and version."""
+    ref = ref.strip()
+    name, separator, rest = ref.partition("/")
+    if not separator or not name:
+        return None
+    spec = re.split(r"[@#%]", rest, maxsplit=1)[0].strip()
+    if not spec:
+        return None
+    if spec.startswith("["):
+        spec = _match_version(spec) or ""
+    if not spec:
+        return None
+    return normalize_name(name), spec
+
+
+def _iter_conan_refs(data: object) -> Iterable[str]:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in _CONAN_KEYS and isinstance(value, list):
+                yield from (item for item in value if isinstance(item, str))
+            else:
+                yield from _iter_conan_refs(value)
+    elif isinstance(data, list):
+        for item in data:
+            yield from _iter_conan_refs(item)
+
+
+def _deps_from_conan_lock(path: Path) -> dict[str, str | None]:
+    """Conan 2.x flat ref lists and conan 1.x ``graph_lock`` nodes."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    refs = list(_iter_conan_refs(data))
+    nodes = data.get("graph_lock", {}).get("nodes", {}) if isinstance(data, dict) else {}
+    if isinstance(nodes, dict):
+        for node in nodes.values():
+            if isinstance(node, dict) and "path" not in node and isinstance(node.get("ref"), str):
+                refs.append(node["ref"])
+    deps: dict[str, str | None] = {}
+    for ref in refs:
+        parsed = _parse_conan_ref(ref)
+        if parsed is not None:
+            deps[parsed[0]] = parsed[1]
+    return deps
+
+
+def _deps_from_conanfile_py(path: Path) -> dict[str, str | None]:
+    """The ``requires`` attribute (conan 1.x) and ``self.requires()`` calls (2.x)."""
+    body = path.read_text(encoding="utf-8", errors="replace")
+    refs: list[str] = []
+    for match in _CONAN_PY_REQUIRES_RE.finditer(body):
+        rest = body[match.end() :].lstrip()
+        if rest[:1] in ("(", "["):
+            closing = rest.find(")" if rest[0] == "(" else "]")
+            rest = rest[1:closing] if closing != -1 else rest[1:]
+        else:
+            rest = rest.splitlines()[0] if rest.splitlines() else ""
+        refs.extend(_CONAN_QUOTED_RE.findall(rest))
+    for match in _CONAN_PY_SELF_REQUIRES_RE.finditer(body):
+        refs.extend(_CONAN_QUOTED_RE.findall(match.group(1)))
+    deps: dict[str, str | None] = {}
+    for ref in refs:
+        parsed = _parse_conan_ref(ref)
+        if parsed is not None:
+            deps[parsed[0]] = parsed[1]
+    return deps
+
+
+def _deps_from_conanfile_txt(path: Path) -> dict[str, str | None]:
+    deps: dict[str, str | None] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", "[")):
+            continue
+        parsed = _parse_conan_ref(line)
+        if parsed is not None:
+            deps[parsed[0]] = parsed[1]
     return deps
 
 
