@@ -225,6 +225,20 @@ def test_mcp_get_docs_warns_from_the_project_manifest(home, docs_dir, tmp_path):
     assert warning["version_not_indexed"] is True
 
 
+def test_mcp_get_docs_reports_the_documentation_version_of_each_variant(home, docs_dir):
+    with open_db(Config().db_path) as conn:
+        add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="1.0")
+        add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="2.0")
+
+    for library_id, version in (("local/demo", "1.0"), ("local/demo@2.0", "2.0")):
+        payload = _call_tool(
+            "get-library-docs",
+            {"libraryId": library_id, "query": "middleware"},
+        )
+        assert payload["library_id"] == library_id
+        assert payload["documentation_version"] == version
+
+
 def test_cli_add_opt_in_branch(home, docs_dir, capsys):
     assert main(["add", str(docs_dir), "--name", "demo", "--version", "1.0"]) == 0
     capsys.readouterr()

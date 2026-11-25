@@ -148,6 +148,7 @@ async def test_mcp_get_library_docs(home_index):
             assert not _is_error(result)
             payload = _payload(result)
             assert payload["library_id"] == "local/demo"
+            assert payload["documentation_version"] == "1.0"
             assert payload["snippets"], "expected fragments"
             top = payload["snippets"][0]
             assert top["source"] == "guide.md"

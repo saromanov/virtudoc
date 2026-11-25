@@ -50,6 +50,7 @@ def doc_payload(
     warning: dict | None,
     *,
     library_id: str,
+    documentation_version: str | None,
     query: str,
     context: dict[str, Any],
     coverage: Coverage,
@@ -61,7 +62,8 @@ def doc_payload(
 ) -> dict[str, Any]:
     """Assemble the response in the documented key order (FR-9).
 
-    `version_mismatch` → `library_id` → `query` → mode/page/section →
+    `version_mismatch` → `library_id` → `documentation_version` → `query` →
+    mode/page/section →
     `coverage` → `missing_identifiers` → `unreturned_identifiers` →
     `message` → `notes_warning` → `notes` → `notes_omitted` →
     `snippets`/`sections` → totals.
@@ -70,6 +72,7 @@ def doc_payload(
     if warning:
         payload["version_mismatch"] = warning
     payload["library_id"] = library_id
+    payload["documentation_version"] = documentation_version
     payload["query"] = query
     payload.update(context)
     payload["coverage"] = coverage.level

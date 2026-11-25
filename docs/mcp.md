@@ -169,6 +169,7 @@ Fragments mode returns:
 ```json
 {
   "library_id": "local/mylib",
+  "documentation_version": "1.2.0",
   "query": "authenticate request",
   "page": 1,
   "coverage": "partial",
@@ -233,6 +234,8 @@ Fragments mode returns:
   The topic boost and the code-language boost multiply it. Scores are
   comparable only within one response — see
   [How search works](search.md#score-semantics).
+- `documentation_version` is the release whose fragments are returned; `null`
+  means the fragments come from an unversioned working branch.
 - When docs and project versions diverge (see
   [Version drift](versions.md)), the output starts with a
   `version_mismatch` block naming both versions and the manifest. Without
@@ -248,10 +251,10 @@ Fragments mode returns:
 - Exceeding the budget is not an error: the page ends before the next
   fragment, and a fragment larger than the whole budget is truncated.
 - Response keys keep a stable order: `version_mismatch` → `library_id` →
-  `query` → `mode`/`page`/`section` → `coverage` → `missing_identifiers` →
-  `unreturned_identifiers` → `message` → `notes_warning` → `notes` →
-  `notes_omitted` → `snippets`/`sections` → `total_tokens` →
-  `total_matches` → `has_more`.
+  `documentation_version` → `query` → `mode`/`page`/`section` → `coverage` →
+  `missing_identifiers` → `unreturned_identifiers` → `message` →
+  `notes_warning` → `notes` → `notes_omitted` → `snippets`/`sections` →
+  `total_tokens` → `total_matches` → `has_more`.
 
 Outline mode (`mode: "outline"`) returns the section tree with chunk counts
 and token estimates instead of fragments — the agent can plan what to load

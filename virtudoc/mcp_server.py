@@ -68,7 +68,8 @@ GET_DOCS_DESCRIPTION = (
     "does not cover the query, 'partial' means identifiers listed in "
     "'missing_identifiers' are not in the documentation at all (they may be "
     "renamed or removed). In both cases do not use those identifiers from "
-    "memory; tell the user instead."
+    "memory; tell the user instead. The response carries 'documentation_version' "
+    "— the release (or None for an unversioned working branch) the fragments come from."
 )
 
 
@@ -187,7 +188,9 @@ def build_server(config: Config) -> MCPServer:
         budget = min(max(tokens, 100), MAX_TOKENS_HARD_LIMIT)
         page = max(page, 1)
         with connect() as conn:
-            lib = conn.execute("SELECT id FROM libraries WHERE id = ?", (libraryId,)).fetchone()
+            lib = conn.execute(
+                "SELECT id, version FROM libraries WHERE id = ?", (libraryId,)
+            ).fetchone()
             if lib is None:
                 raise ToolError(
                     f"library not found: {libraryId!r}; "
@@ -224,6 +227,7 @@ def build_server(config: Config) -> MCPServer:
                 return doc_payload(
                     warning,
                     library_id=libraryId,
+                    documentation_version=lib["version"],
                     query=query,
                     context={"mode": "outline", "section": section},
                     coverage=coverage,
@@ -283,6 +287,7 @@ def build_server(config: Config) -> MCPServer:
             return doc_payload(
                 warning,
                 library_id=libraryId,
+                documentation_version=lib["version"],
                 query=query,
                 context={"page": result.page},
                 coverage=coverage,
