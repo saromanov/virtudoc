@@ -395,3 +395,99 @@ def test_section_filter_selects_headingless_chunks(tmp_path, conn):
 
     tree = library_outline(conn, lib_id, section="(no section)")
     assert [node.section for node in tree] == ["(no section)"]
+
+
+def _index_texts(tmp_path, conn, name, texts):
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+
+    source = tmp_path / name
+    source.mkdir()
+    for filename, text in texts.items():
+        (source / filename).write_text(text, encoding="utf-8")
+    lib_id = add_library(conn, source, name)
+    index_library(conn, lib_id, Chunker())
+    return lib_id
+
+
+def test_prefix_cascade_matches_y_plural_forms(tmp_path, conn):
+    plural_lib = _index_texts(
+        tmp_path, conn, "plural", {"doc.md": "# Retry\n\nRetries happen when calls fail.\n"}
+    )
+    assert search(conn, "retry", library_id=plural_lib).snippets
+
+    policies_lib = _index_texts(
+        tmp_path, conn, "policies", {"doc.md": "# Access\n\nAll policies apply per request.\n"}
+    )
+    assert search(conn, "policy", library_id=policies_lib).snippets
+
+    policy_lib = _index_texts(
+        tmp_path, conn, "policy", {"doc.md": "# Access\n\nOne policy applies per request.\n"}
+    )
+    assert search(conn, "policies", library_id=policy_lib).snippets
+
+
+def test_trigram_stage_merges_with_word_hits(tmp_path, conn):
+    lib_id = _index_texts(
+        tmp_path,
+        conn,
+        "subword",
+        {
+            "plain.md": "# Auth\n\nauth check happens here.\n",
+            "compound.md": "# Compound\n\ncall middlewareAuth before requests.\n",
+        },
+    )
+    result = search(conn, "auth", library_id=lib_id)
+    sources = {snippet.source for snippet in result.snippets}
+    assert {"plain.md", "compound.md"} <= sources
+
+
+def test_snippets_contained_in_another_are_deduplicated(tmp_path, conn):
+    lib_id = _index_texts(
+        tmp_path,
+        conn,
+        "dedupe",
+        {
+            "short.md": "# Short\n\ndedupe marker sentence.\n",
+            "long.md": "# Long\n\nLonger passage with dedupe marker sentence. Extra tail here.\n",
+        },
+    )
+    result = search(conn, "dedupe", library_id=lib_id)
+    assert result.total_matches == 2
+    assert len(result.snippets) == 1
+    assert "Longer passage" in result.snippets[0].text
+
+
+def test_served_fragment_keeps_code_fence(tmp_path, conn):
+    lib_id = _index_texts(
+        tmp_path,
+        conn,
+        "fences",
+        {"code.md": "# Code\n\nRun the worker:\n\n```python\nworker.start()\n```\n"},
+    )
+    result = search(conn, "worker", library_id=lib_id)
+    assert result.snippets
+    assert "```python\nworker.start()\n```" in result.snippets[0].text
+
+
+def test_trim_to_window_never_cuts_inside_code_fence():
+    prose = "Фоновый текст без совпадений. " * 60
+    code = "```python\n" + "step = value\n" * 30 + "```"
+    text = f"{prose}middleware marker\n\n{code}\n\n{prose}"
+    cut = trim_to_window(text, ["middleware"], 40)
+    assert "middleware" in cut
+    assert cut.count("```") % 2 == 0
+
+
+def test_trim_to_window_cuts_at_token_boundaries():
+    text = (
+        " ".join(f"word{index}" for index in range(400))
+        + " middleware "
+        + " ".join(f"tail{index}" for index in range(400))
+    )
+    cut = trim_to_window(text, ["middleware"], 20)
+    body = cut.removeprefix("… ").removesuffix(" …")
+    assert "middleware" in body
+    words = set(text.split())
+    assert all(word in words for word in body.split())
+

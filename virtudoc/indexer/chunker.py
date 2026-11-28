@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from ..tokens import estimate_tokens
@@ -44,13 +45,81 @@ def _split_oversized(text: str, max_tokens: int) -> list[str]:
     return [p for p in marked if p.strip()]
 
 
+def _render_block(block: Block) -> str:
+    """Render a chunk block as Markdown, restoring fences around code."""
+    if block.kind != "code":
+        return block.text
+    body = block.text.strip("\n")
+    return f"```{block.lang.strip()}\n{body}\n```"
+
+
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _split_blocks(text: str) -> list[str]:
+    """Split rendered chunk text into blank-line-separated blocks, fences intact."""
+    blocks: list[str] = []
+    current: list[str] = []
+    inside_fence = False
+    for line in text.split("\n"):
+        if _FENCE_RE.match(line):
+            inside_fence = not inside_fence
+        if not line.strip() and not inside_fence:
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def _tail_pieces(block: str) -> tuple[list[str], str]:
+    if _FENCE_RE.match(block):
+        return [block], "\n\n"
+    for split, separator in (
+        (_SENTENCE_SPLIT.split(block), " "),
+        (block.split("\n"), "\n"),
+        (block.split(" "), " "),
+    ):
+        pieces = [piece for piece in split if piece.strip()]
+        if len(pieces) > 1:
+            return pieces, separator
+    return [block], "\n\n"
+
+
 def _overlap_tail(text: str, overlap_tokens: int) -> str:
     if overlap_tokens <= 0 or not text:
         return ""
-    candidate = text[-overlap_tokens * 4 :]
-    while len(candidate) > 40 and estimate_tokens(candidate) > overlap_tokens:
-        candidate = candidate[len(candidate) // 10 :]
-    return candidate.lstrip()
+    blocks = _split_blocks(text)
+    tail: list[str] = []
+    used = 0
+    while blocks:
+        block = blocks.pop()
+        est = estimate_tokens(block)
+        if used and used + est > overlap_tokens:
+            break
+        if not used and est > overlap_tokens:
+            pieces, separator = _tail_pieces(block)
+            collected: list[str] = []
+            for piece in reversed(pieces):
+                piece_est = estimate_tokens(piece)
+                if collected and used + piece_est > overlap_tokens:
+                    break
+                collected.insert(0, piece)
+                used += piece_est
+                if used >= overlap_tokens:
+                    break
+            if collected:
+                tail.insert(0, separator.join(collected))
+            break
+        tail.insert(0, block)
+        used += est
+        if used >= overlap_tokens:
+            break
+    return "\n\n".join(tail).strip("\n")
 
 
 class Chunker:
@@ -79,13 +148,18 @@ class Chunker:
             nonlocal current_blocks, current_tokens, current_path, prev_text
             if not current_blocks:
                 return
-            text = "\n\n".join(block.text for block in current_blocks).strip()
+            rendered = [_render_block(block) for block in current_blocks]
+            text = "\n\n".join(rendered).strip()
             if not text:
                 current_blocks = []
                 current_tokens = 0
                 return
-            code_chars = sum(len(block.text) for block in current_blocks if block.kind == "code")
-            total_chars = sum(len(block.text) for block in current_blocks)
+            code_chars = sum(
+                len(rendered_text)
+                for rendered_text, block in zip(rendered, current_blocks)
+                if block.kind == "code"
+            )
+            total_chars = sum(len(rendered_text) for rendered_text in rendered)
             lang = next(
                 (block.lang for block in current_blocks if block.kind == "code" and block.lang),
                 "",
@@ -131,7 +205,7 @@ class Chunker:
                     current_blocks.append(sub)
                     current_tokens += estimate_tokens(part)
                 continue
-            est = estimate_tokens(block.text)
+            est = estimate_tokens(_render_block(block))
             if current_blocks and current_tokens + est > self.target:
                 start_new()
             current_blocks.append(block)

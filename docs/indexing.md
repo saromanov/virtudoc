@@ -32,8 +32,11 @@ unsupported extensions) always apply and cannot be overridden.
 - Target size is 600 tokens; chunks approaching 1200 tokens are split at
   paragraph boundaries. Adjacent chunks overlap by roughly 60 tokens so
   context is not lost at boundaries.
-- Fenced code blocks are never split. An oversized paragraph is cut at
-  line boundaries with a `(continued)` marker.
+- Fenced code blocks are never split and are stored as fenced Markdown
+  with their language, so served chunks remain self-describing. An
+  oversized paragraph is cut at line boundaries with a `(continued)`
+  marker. The overlap between adjacent chunks is taken from whole trailing
+  blocks or sentences.
 - Each chunk stores an empirical token estimate
   (chars/4 for latin, chars/3 for cyrillic text) and the code-to-text
   ratio of its content.
