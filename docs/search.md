@@ -14,8 +14,8 @@ terminal and for agents calling `get-library-docs`.
      Russian words lose common noun/adjective endings, English words lose
      only inflectional suffixes (`-ing`, `-ed`, `-es`, `-s`, `-ies`), so
      `пакетная` finds `пакетной`, `запросов` finds `запросы`,
-     `configuring` finds `configured`. An English stem ending in `y` also
-     matches its `i` form, so `retry` finds `retries` and `policy` finds
+     `configuring` finds `configured`. An English stem ending in a consonant plus
+     `y` also matches its `i` form, so `retry` finds `retries` and `policy` finds
      `policies`. English words are never cut to an arbitrary length:
      `assert` does not become a prefix of `assessment`;
    - `OR` — any word is enough (ranked by relevance).
@@ -23,8 +23,8 @@ terminal and for agents calling `get-library-docs`.
    words as *substrings*, so subword hits inside compound identifiers
    (`auth` inside `middlewareAuth`) still surface. This stage always runs
    and its candidates are merged with the word-stage candidates by chunk:
-   a chunk found by both keeps its word-stage score, a trigram-only chunk
-   gets a modest score penalty, so it never outranks a word match.
+   a chunk found by both keeps its word-stage score, and a trigram-only
+   chunk ranks below every word-stage hit.
 5. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
    file name matches a query word on **token boundaries** get a topic
    boost; chunks containing code blocks in the requested `language` are

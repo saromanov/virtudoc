@@ -20,8 +20,6 @@ _SECTION_ARROW_RE = re.compile(r"\s*(?:→|->)\s*")
 
 TOPIC_BONUS = 0.25
 LANGUAGE_BONUS = 0.15
-# Trigram-only candidates rank below word-stage hits for the same query.
-TRIGRAM_PENALTY = 0.8
 # A topic prefix shorter than this matches too many unrelated headings.
 MIN_TOPIC_PREFIX = 4
 NO_SECTION = "(no section)"
@@ -135,7 +133,12 @@ def _stem_alternative(token: str) -> str | None:
     "retri*" to reach the indexed plural "retries".
     """
     stem = _stem(token)
-    if _LATIN_TOKEN_RE.fullmatch(stem) and len(stem) >= 4 and stem.endswith("y"):
+    if (
+        _LATIN_TOKEN_RE.fullmatch(stem)
+        and len(stem) >= 4
+        and stem.endswith("y")
+        and stem[-2] not in "aeiou"
+    ):
         return f"{stem[:-1]}i"
     return None
 
@@ -282,25 +285,41 @@ def _best_window(text: str, anchors: list[str], window_chars: int) -> tuple[int,
     return start, end
 
 
-_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _BOUNDARY_LOOKAROUND = 80
+
+
+def _fence_closes(line: str, opening: str) -> bool:
+    match = _FENCE_RE.match(line)
+    if not match or match.group(1)[0] != opening[0]:
+        return False
+    return len(match.group(1)) >= len(opening)
+
+
+def _scan_fences(text: str) -> tuple[list[tuple[int, int]], int | None]:
+    """Fenced spans, plus the offset of an unclosed opening fence if any."""
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    opened_at: int | None = None
+    opening = ""
+    for line in text.splitlines(keepends=True):
+        match = _FENCE_RE.match(line)
+        if opened_at is None:
+            if match:
+                opened_at = offset
+                opening = match.group(1)
+        elif _fence_closes(line, opening):
+            ranges.append((opened_at, offset + len(line)))
+            opened_at = None
+        offset += len(line)
+    return ranges, opened_at
 
 
 def _fenced_ranges(text: str) -> list[tuple[int, int]]:
     """Character spans of fenced code blocks, opening and closing fences included."""
-    ranges: list[tuple[int, int]] = []
-    offset = 0
-    opened_at: int | None = None
-    for line in text.splitlines(keepends=True):
-        if _FENCE_RE.match(line):
-            if opened_at is None:
-                opened_at = offset
-            else:
-                ranges.append((opened_at, offset + len(line)))
-                opened_at = None
-        offset += len(line)
-    if opened_at is not None:
-        ranges.append((opened_at, len(text)))
+    ranges, open_at = _scan_fences(text)
+    if open_at is not None:
+        ranges.append((open_at, len(text)))
     return ranges
 
 
@@ -351,7 +370,14 @@ def trim_to_window(text: str, tokens: list[str], window_tokens: int) -> str:
     if window_tokens <= 0 or estimate_tokens(text) <= window_tokens:
         return text
     window_chars = window_tokens * CYRILLIC_CHARS_PER_TOKEN  # worst-case density
-    anchors = sorted({form for tok in tokens for form in (tok, _stem(tok))})
+    anchors = sorted(
+        {
+            form
+            for tok in tokens
+            for form in (tok, _stem(tok), _stem_alternative(tok))
+            if form
+        }
+    )
     start, end = _best_window(text, anchors, window_chars)
     start, end = _snap_window(text, start, end)
     if end <= start:
@@ -360,6 +386,16 @@ def trim_to_window(text: str, tokens: list[str], window_tokens: int) -> str:
     prefix = "… " if start > 0 else ""
     suffix = " …" if end < len(text) else ""
     return f"{prefix}{cut}{suffix}"
+
+
+def _truncate_keeping_fences(text: str, max_tokens: int) -> str:
+    """Truncate to a token budget, dropping a code block the cut would leave open."""
+    truncated = truncate_to_tokens(text, max_tokens)
+    _, open_at = _scan_fences(truncated)
+    if open_at is None:
+        return truncated
+    kept = truncated[:open_at].rstrip()
+    return f"{kept}…" if kept else ""
 
 
 def _dedupe_snippets(snippets: list[Snippet]) -> list[Snippet]:
@@ -411,8 +447,11 @@ def _page_snippets(
             if est > remaining:
                 if snippets:
                     break
-                text = truncate_to_tokens(text, remaining)
+                text = _truncate_keeping_fences(text, remaining)
                 est = estimate_tokens(text)
+                if not text:
+                    cursor += 1
+                    continue
             snippets.append(
                 Snippet(
                     heading_path=row["heading_path"],
@@ -427,6 +466,28 @@ def _page_snippets(
             if remaining <= 0:
                 break
     return _dedupe_snippets(snippets), cursor < len(scored)
+
+
+def _rank_candidates(
+    rows_by_id: dict[int, sqlite3.Row],
+    trigram_only: set[int],
+    tokens: list[str],
+    language: str | None,
+) -> list[tuple[float, sqlite3.Row]]:
+    """Order candidates; every word-stage hit outranks a trigram-only match."""
+    scored: list[tuple[int, float, sqlite3.Row]] = []
+    for chunk_id, row in rows_by_id.items():
+        # FTS5 bm25() returns a negative rank (more negative is better), so
+        # its negation is a relevance score: larger means more relevant.
+        score = max(0.0, -float(row["rank"]))
+        tier = 1 if chunk_id in trigram_only else 0
+        if _topic_boost(row, tokens):
+            score *= 1.0 + TOPIC_BONUS
+        if language and (row["lang"] or "").lower() == language.lower():
+            score *= 1.0 + LANGUAGE_BONUS
+        scored.append((tier, score, row))
+    scored.sort(key=lambda item: (item[0], -item[1]))
+    return [(score, row) for _, score, row in scored]
 
 
 def search(
@@ -468,20 +529,7 @@ def search(
         ):
             rows_by_id.setdefault(row["id"], row)
     trigram_only = set(rows_by_id) - {row["id"] for row in candidates}
-
-    scored: list[tuple[float, sqlite3.Row]] = []
-    for chunk_id, row in rows_by_id.items():
-        # FTS5 bm25() returns a negative rank (more negative is better), so
-        # its negation is a relevance score: larger means more relevant.
-        score = max(0.0, -float(row["rank"]))
-        if chunk_id in trigram_only:
-            score *= TRIGRAM_PENALTY
-        if _topic_boost(row, tokens):
-            score *= 1.0 + TOPIC_BONUS
-        if language and (row["lang"] or "").lower() == language.lower():
-            score *= 1.0 + LANGUAGE_BONUS
-        scored.append((score, row))
-    scored.sort(key=lambda item: item[0], reverse=True)
+    scored = _rank_candidates(rows_by_id, trigram_only, tokens, language)
 
     result.total_matches = len(scored)
     result.snippets, result.has_more = _page_snippets(

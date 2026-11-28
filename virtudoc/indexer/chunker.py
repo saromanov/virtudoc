@@ -45,15 +45,27 @@ def _split_oversized(text: str, max_tokens: int) -> list[str]:
     return [p for p in marked if p.strip()]
 
 
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_FENCE_RUN_RE = re.compile(r"`+")
+
+
+def _fence_closes(line: str, opening: str) -> bool:
+    match = _FENCE_RE.match(line)
+    if not match or match.group(1)[0] != opening[0]:
+        return False
+    return len(match.group(1)) >= len(opening)
+
+
 def _render_block(block: Block) -> str:
     """Render a chunk block as Markdown, restoring fences around code."""
     if block.kind != "code":
         return block.text
     body = block.text.strip("\n")
-    return f"```{block.lang.strip()}\n{body}\n```"
+    longest = max((len(run) for run in _FENCE_RUN_RE.findall(body)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{block.lang.strip()}\n{body}\n{fence}"
 
 
-_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 
 
@@ -61,11 +73,15 @@ def _split_blocks(text: str) -> list[str]:
     """Split rendered chunk text into blank-line-separated blocks, fences intact."""
     blocks: list[str] = []
     current: list[str] = []
-    inside_fence = False
+    opening: str | None = None
     for line in text.split("\n"):
-        if _FENCE_RE.match(line):
-            inside_fence = not inside_fence
-        if not line.strip() and not inside_fence:
+        if opening is None:
+            match = _FENCE_RE.match(line)
+            if match:
+                opening = match.group(1)
+        elif _fence_closes(line, opening):
+            opening = None
+        if not line.strip() and opening is None:
             if current:
                 blocks.append("\n".join(current))
                 current = []
