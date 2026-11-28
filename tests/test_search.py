@@ -491,3 +491,62 @@ def test_trim_to_window_cuts_at_token_boundaries():
     words = set(text.split())
     assert all(word in words for word in body.split())
 
+
+def test_trigram_only_candidates_rank_below_word_hits():
+    from virtudoc.search.engine import _rank_candidates
+
+    word_row = {
+        "id": 1,
+        "rank": -0.01,
+        "heading_path": "",
+        "rel_path": "long.md",
+        "lang": "",
+    }
+    tri_row = {
+        "id": 2,
+        "rank": -50.0,
+        "heading_path": "",
+        "rel_path": "short.md",
+        "lang": "",
+    }
+    ranked = _rank_candidates({1: word_row, 2: tri_row}, {2}, ["auth"], None)
+    assert [row["id"] for _, row in ranked] == [1, 2]
+
+
+def test_stem_alternative_skips_vowel_y_words():
+    from virtudoc.search.engine import _stem_alternative
+
+    assert _stem_alternative("retry") == "retri"
+    assert _stem_alternative("play") is None
+
+
+def test_vowel_y_query_does_not_match_plain_words(tmp_path, conn):
+    lib_id = _index_texts(
+        tmp_path, conn, "vowely", {"doc.md": "# Notes\n\nplain text about nothing.\n"}
+    )
+    assert search(conn, "play", library_id=lib_id).snippets == []
+
+
+def test_trim_to_window_anchors_on_y_to_i_alternative():
+    filler = "Заполнитель без совпадений. " * 60
+    mention = "Retries happen when calls fail."
+    text = f"{filler}\n{mention}\n{filler}"
+    cut = trim_to_window(text, ["retry"], 40)
+    assert "retries" in cut.lower()
+
+
+def test_truncate_keeping_fences_drops_unclosed_block():
+    from virtudoc.search.engine import _truncate_keeping_fences
+
+    text = "intro text\n\n```python\n" + "step = value\n" * 60 + "```"
+    cut = _truncate_keeping_fences(text, 30)
+    assert "intro text" in cut
+    assert cut.count("```") % 2 == 0
+    assert "step = value" not in cut
+
+
+def test_search_budget_truncation_keeps_fences_balanced(tmp_path, conn):
+    code = "```python\n" + "worker = value\n" * 60 + "```\n"
+    lib_id = _index_texts(tmp_path, conn, "bigcode", {"code.md": f"# Code\n\n{code}"})
+    result = search(conn, "worker", library_id=lib_id, token_budget=10)
+    assert all(snippet.text.count("```") % 2 == 0 for snippet in result.snippets)

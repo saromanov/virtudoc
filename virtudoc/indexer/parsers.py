@@ -98,7 +98,7 @@ def parse_markdown(text: str) -> ParsedDocument:
             lang = ""
             first = segment[0].strip() if segment else ""
             if first.startswith(("```", "~~~")):
-                lang = first[3:].strip()
+                lang = first.lstrip("`~").strip()
                 segment = segment[1:]
                 if segment and segment[-1].strip().startswith(("```", "~~~")):
                     segment = segment[:-1]

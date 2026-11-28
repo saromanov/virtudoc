@@ -117,6 +117,23 @@ def test_code_blocks_rendered_with_fences():
     assert "```python\nprint(1)\n```" in code_chunk.text
 
 
+def test_rendered_code_fence_outlasts_inner_backticks():
+    text = "# T\n\n## Код\n\n````markdown\n```python\nprint(1)\n```\n````\n"
+    chunks = make_chunker().chunk(parse_markdown(text))
+    code_chunk = next(chunk for chunk in chunks if "print(1)" in chunk.text)
+    rendered = code_chunk.text
+    assert rendered.startswith("````markdown\n")
+    assert rendered.endswith("\n````")
+    assert "```python\nprint(1)\n```" in rendered
+
+
+def test_split_blocks_respects_long_outer_fence():
+    from virtudoc.indexer.chunker import _split_blocks
+
+    text = "````text\n```\ncode\n\nmore\n```\n````"
+    assert _split_blocks(text) == [text]
+
+
 def test_overlap_tail_uses_whole_blocks():
     from virtudoc.indexer.chunker import _overlap_tail
 
