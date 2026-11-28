@@ -208,6 +208,43 @@ def test_doctor_reports_drift_for_an_exact_pin(conn, docs_dir, tmp_path):
     assert any("version drift" in line for line in result.lines)
 
 
+def test_doctor_does_not_certify_unevaluable_constraints(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.versions import link_library
+
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "package.json").write_text('{"dependencies": {"demo": "^2.0"}}', encoding="utf-8")
+    link_library(conn, lib_id, project)
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert not any("versions match" in line for line in result.lines)
+    assert not any("satisfies ^2.0" in line for line in result.lines)
+    assert any("versions unknown" in line for line in result.lines)
+    assert result.problems == 0
+
+
+def test_doctor_reports_drift_outside_the_declared_range(conn, docs_dir, tmp_path):
+    from virtudoc.doctor import run_doctor
+    from virtudoc.indexer.chunker import Chunker
+    from virtudoc.indexer.indexer import add_library, index_library
+    from virtudoc.versions import link_library
+
+    lib_id = add_library(conn, docs_dir, "demo", version="1.9")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text("demo>=2.0\n", encoding="utf-8")
+    link_library(conn, lib_id, project)
+
+    result = run_doctor(conn, _doctor_config(tmp_path))
+    assert any("version drift" in line for line in result.lines)
+
+
 def test_doctor_reports_orphan_chunks(conn, tmp_path):
     from virtudoc.doctor import run_doctor
 
