@@ -24,6 +24,7 @@ MANIFEST_CANDIDATES = (
 )
 
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
+_MATCH_VERSION_RE = re.compile(r"v?\d+(?:\.\d+)*")
 _REQ_NAME_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 _GO_MOD_RE = re.compile(r"^\s*(?:require\s+)?([^\s]+)\s+(v?\d+(?:\.\d+)+[^\s]*)")
 _CONAN_KEYS = ("requires", "build_requires", "python_requires")
@@ -45,6 +46,7 @@ class ResolvedVersion:
     manifest_path: Path
     version: str
     dependency_name: str
+    spec: str | None = None
 
 
 # Lockfiles resolve exact versions, so they win over declared ranges in a
@@ -105,14 +107,18 @@ def resolve_project_versions(
         manifest = manifests.get(name)
         if manifest is None:
             continue
-        dependencies = extract_dependencies(manifest)
+        dependencies = extract_dependency_specs(manifest)
         for dependency in wanted - resolved.keys():
-            version = dependencies.get(dependency)
+            spec = dependencies.get(dependency)
+            if not spec:
+                continue
+            version = _match_version(spec)
             if version:
                 resolved[dependency] = ResolvedVersion(
                     manifest_path=manifest,
                     version=version,
                     dependency_name=dependency,
+                    spec=spec,
                 )
         if len(resolved) == len(wanted):
             break
@@ -200,12 +206,124 @@ def version_status(doc_version: str | None, dep_version: str | None) -> str:
     )
 
 
+_SPEC_OPERATORS = ("~=", "==", "!=", ">=", "<=", ">", "<")
+_SPEC_VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)*(?:[A-Za-z0-9._+!-]*)$")
+
+
+def _compare_cores(left: tuple[int, ...], right: tuple[int, ...]) -> int:
+    left = _trim_trailing_zeros(left)
+    right = _trim_trailing_zeros(right)
+    if left == right:
+        return 0
+    return 1 if left > right else -1
+
+
+def _parse_spec_clause(clause: str) -> tuple[str, tuple[int, ...]] | None:
+    operator = "=="
+    raw = clause
+    for candidate in _SPEC_OPERATORS:
+        if clause.startswith(candidate):
+            operator = candidate
+            raw = clause[len(candidate) :].strip()
+            break
+    if not _SPEC_VERSION_RE.match(raw):
+        return None
+    core = version_core(raw)
+    if core is None:
+        return None
+    return operator, core
+
+
+def _parse_spec(spec: str | None) -> list[tuple[str, tuple[int, ...]]] | None:
+    if not spec:
+        return None
+    text = spec.split(";", 1)[0].strip()
+    if text.startswith("["):
+        closing = text.find("]")
+        if closing == -1:
+            return None
+        text = text[closing + 1 :].strip()
+    if not text:
+        return None
+    clauses = []
+    for clause in text.split(","):
+        parsed = _parse_spec_clause(clause.strip())
+        if parsed is None:
+            return None
+        clauses.append(parsed)
+    return clauses
+
+
+def _compatible(doc_core: tuple[int, ...], operand: tuple[int, ...]) -> bool:
+    if len(operand) < 2:
+        return False
+    if _compare_cores(doc_core, operand) < 0:
+        return False
+    prefix = operand[:-1]
+    doc = _trim_trailing_zeros(doc_core)
+    padded = doc + (0,) * max(0, len(prefix) - len(doc))
+    return padded[: len(prefix)] == prefix
+
+
+def _satisfies(doc_core: tuple[int, ...], operator: str, operand: tuple[int, ...]) -> bool:
+    if operator == "~=":
+        return _compatible(doc_core, operand)
+    comparison = _compare_cores(doc_core, operand)
+    outcomes = {
+        "==": comparison == 0,
+        "!=": comparison != 0,
+        ">=": comparison >= 0,
+        ">": comparison > 0,
+        "<=": comparison <= 0,
+        "<": comparison < 0,
+    }
+    return outcomes[operator]
+
+
+def range_status(spec: str | None, doc_version: str | None) -> str:
+    """One of: match, mismatch, unknown for a declared range against the docs.
+
+    Exact pins (``==2.0`` or a bare ``2.0``) compare as :func:`version_status`
+    does. A constraint that cannot be evaluated (``*``, ``latest``, a git URL,
+    a space-separated conan range) is unknown and produces no warning.
+    """
+    doc_core = version_core(doc_version)
+    clauses = _parse_spec(spec)
+    if doc_core is None or clauses is None:
+        return "unknown"
+    if all(_satisfies(doc_core, operator, operand) for operator, operand in clauses):
+        return "match"
+    return "mismatch"
+
+
+def dependency_status(doc_version: str | None, spec: str | None, dep_version: str | None) -> str:
+    """One of: match, mismatch, unknown for docs against a declared dependency.
+
+    A declared range is evaluated against the documentation version; an exact
+    pin or a missing spec falls back to :func:`version_status`.
+    """
+    if spec:
+        return range_status(spec, doc_version)
+    return version_status(doc_version, dep_version)
+
+
 def extract_dependencies(manifest_path: Path) -> dict[str, str | None]:
     """Declared dependencies of a manifest: normalized name -> version.
 
     Lockfiles contribute their whole resolved graph, while direct manifests
     contribute only declared dependencies. An unreadable or unknown manifest
     yields an empty mapping instead of raising.
+    """
+    return {
+        name: _match_version(spec) for name, spec in extract_dependency_specs(manifest_path).items()
+    }
+
+
+def extract_dependency_specs(manifest_path: Path) -> dict[str, str | None]:
+    """Raw declared constraint per dependency: ``>=2.0,<3`` or ``==1.4.0``.
+
+    Unlike :func:`extract_dependencies`, the operator survives, so a range can
+    be checked against a documentation version instead of being read as a pin.
     """
     try:
         if manifest_path.name == "pyproject.toml":
@@ -235,11 +353,16 @@ def extract_dep_version(manifest_path: Path, library_name: str) -> str | None:
     return extract_dependencies(manifest_path).get(normalize_name(library_name))
 
 
+def extract_dep_spec(manifest_path: Path, library_name: str) -> str | None:
+    """Raw declared constraint of one dependency, operator included."""
+    return extract_dependency_specs(manifest_path).get(normalize_name(library_name))
+
+
 def _match_version(spec: str | None) -> str | None:
     if not spec:
         return None
-    match = _VERSION_RE.search(spec)
-    return match.group(1) if match else None
+    match = _MATCH_VERSION_RE.search(spec)
+    return match.group(0) if match else None
 
 
 def _deps_from_pyproject(path: Path) -> dict[str, str | None]:
@@ -255,7 +378,7 @@ def _deps_from_pyproject(path: Path) -> dict[str, str | None]:
             continue
         match = _REQ_NAME_RE.match(req)
         if match:
-            deps[normalize_name(match.group(1))] = _match_version(req[match.end() :])
+            deps[normalize_name(match.group(1))] = req[match.end() :].strip()
     for dep, version in _deps_from_poetry_section(data).items():
         deps.setdefault(dep, version)
     return deps
@@ -269,7 +392,7 @@ def _deps_from_poetry_section(data: dict) -> dict[str, str | None]:
     deps: dict[str, str | None] = {}
     for dep, spec in dependencies.items():
         spec_value = spec.get("version") if isinstance(spec, dict) else spec
-        deps[normalize_name(dep)] = _match_version(str(spec_value)) if spec_value else None
+        deps[normalize_name(dep)] = str(spec_value) if spec_value else None
     return deps
 
 
@@ -278,7 +401,7 @@ def _deps_from_package_json(path: Path) -> dict[str, str | None]:
     declared: dict[str, str] = {}
     declared.update(data.get("dependencies", {}))
     declared.update(data.get("devDependencies", {}))
-    return {normalize_name(dep): _match_version(spec) for dep, spec in declared.items()}
+    return {normalize_name(dep): spec for dep, spec in declared.items()}
 
 
 def _deps_from_requirements(path: Path) -> dict[str, str | None]:
@@ -289,7 +412,7 @@ def _deps_from_requirements(path: Path) -> dict[str, str | None]:
             continue
         match = _REQ_NAME_RE.match(line)
         if match:
-            deps[normalize_name(match.group(1))] = _match_version(line[match.end() :])
+            deps[normalize_name(match.group(1))] = line[match.end() :].strip()
     return deps
 
 
@@ -326,7 +449,7 @@ def _deps_from_pipfile_lock(path: Path) -> dict[str, str | None]:
     for section in ("default", "develop"):
         for dep, info in data.get(section, {}).items():
             spec = info.get("version") if isinstance(info, dict) else None
-            deps[normalize_name(dep)] = _match_version(spec)
+            deps[normalize_name(dep)] = spec
     return deps
 
 
@@ -337,10 +460,6 @@ def _parse_conan_ref(ref: str) -> tuple[str, str] | None:
     if not separator or not name:
         return None
     spec = re.split(r"[@#%]", rest, maxsplit=1)[0].strip()
-    if not spec:
-        return None
-    if spec.startswith("["):
-        spec = _match_version(spec) or ""
     if not spec:
         return None
     return normalize_name(name), spec
@@ -490,9 +609,11 @@ def mismatch_payload(
         return None
     doc_version = library["version"]
     link = get_link(conn, library_id)
+    spec: str | None = None
     if link is not None:
         dep_version = link["dep_version"]
         manifest_path = Path(link["manifest_path"])
+        spec = extract_dep_spec(manifest_path, library["name"])
     else:
         resolved = resolve_project_version(
             Path(project_path) if project_path else Path.cwd(),
@@ -502,12 +623,17 @@ def mismatch_payload(
             return None
         dep_version = resolved.version
         manifest_path = resolved.manifest_path
-    if version_status(doc_version, dep_version) != "mismatch":
+        spec = resolved.spec
+    if dependency_status(doc_version, spec, dep_version) != "mismatch":
         return None
 
     choices = library_version_choices(conn, library_id)
     suggested = next(
-        (choice for choice in choices if version_status(choice["version"], dep_version) == "match"),
+        (
+            choice
+            for choice in choices
+            if dependency_status(choice["version"], spec, dep_version) == "match"
+        ),
         None,
     )
     available = ", ".join(

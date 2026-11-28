@@ -129,6 +129,27 @@ def test_resolve_libraries_prefers_the_project_version(conn, docs_dir):
     assert next(match for match in ranked if match.id == base_id).version_status == "mismatch"
 
 
+def test_resolve_libraries_accepts_docs_inside_the_declared_range(conn, docs_dir):
+    add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="1.0")
+    add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="2.5")
+
+    ranked = resolve_libraries(
+        conn, "demo", "middleware", resolved_version="2.0", resolved_spec=">=2.0"
+    )
+    assert ranked[0].id == "local/demo@2.5"
+    assert ranked[0].version_status == "match"
+    assert next(match for match in ranked if match.version == "1.0").version_status == "mismatch"
+
+
+def test_resolve_libraries_keeps_exact_pin_semantics(conn, docs_dir):
+    add_and_index_library(conn, docs_dir, "demo", chunker=Chunker(), version="2.5")
+
+    ranked = resolve_libraries(
+        conn, "demo", "middleware", resolved_version="2.0", resolved_spec="==2.0"
+    )
+    assert ranked[0].version_status == "mismatch"
+
+
 def test_branch_does_not_outrank_a_release_without_a_resolved_version(conn, docs_dir):
     add_library(conn, docs_dir, "demo", version="1.0")
     branch_id = add_library(conn, docs_dir, "demo", channel="branch")
