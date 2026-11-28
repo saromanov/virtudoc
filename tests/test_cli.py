@@ -71,6 +71,24 @@ def test_update_command(home, docs_dir, capsys):
     assert "skipped: 3" in out
 
 
+def test_update_all_continues_after_missing_source(home, docs_dir, tmp_path, capsys):
+    import shutil
+
+    assert main(["add", str(docs_dir), "--name", "demo"]) == 0
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    (missing / "index.md").write_text("# Поздняя\n\nТекст.\n", encoding="utf-8")
+    assert main(["add", str(missing), "--name", "late"]) == 0
+    capsys.readouterr()
+    (docs_dir / "fresh.md").write_text("# Свежий\n\nНовый документ.\n", encoding="utf-8")
+    shutil.rmtree(missing)
+    assert main(["update"]) == 1
+    captured = capsys.readouterr()
+    assert "local/demo: processed: 4, reindexed: 1" in captured.out
+    assert "local/late:" in captured.out
+    assert "source directory unavailable" in captured.err
+
+
 def test_reindex_full_rebuild(home, docs_dir, capsys):
     main(["add", str(docs_dir), "--name", "demo"])
     capsys.readouterr()
@@ -267,6 +285,71 @@ def test_export_import_roundtrip(home, docs_dir, tmp_path, capsys):
     assert "imported: 1, failed: 0" in out
     assert main(["list"]) == 0
     assert "local/demo" in capsys.readouterr().out
+
+
+def test_export_import_restores_notes_and_description(home, docs_dir, tmp_path, capsys):
+    assert (
+        main(
+            [
+                "add",
+                str(docs_dir),
+                "--name",
+                "demo",
+                "--version",
+                "1.0",
+                "--description",
+                "Demo documentation",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    from virtudoc.config import Config
+    from virtudoc.db import open_db
+    from virtudoc.notes import add_note, list_notes, note_anchors
+
+    with open_db(Config().db_path) as conn:
+        add_note(
+            conn,
+            "local/demo",
+            "Always use the retry helper for outbound calls.",
+            paths=["guide.md"],
+            scope_version="1.0",
+            pinned=True,
+        )
+        add_note(conn, "local/demo", "The queue contract is stable.")
+    setup = tmp_path / "setup.toml"
+    assert main(["export", str(setup)]) == 0
+    text = setup.read_text(encoding="utf-8")
+    assert 'description = "Demo documentation"' in text
+    assert "Always use the retry helper" in text
+    assert "Project links are per-machine" in text
+    assert "anchors" in text
+
+    for suffix in ("", "-wal", "-shm"):
+        db_file = Config().db_path.with_name(Config().db_path.name + suffix)
+        if db_file.exists():
+            db_file.unlink()
+    capsys.readouterr()
+    assert main(["import", str(setup)]) == 0
+    out = capsys.readouterr().out
+    assert "imported: 1, failed: 0" in out
+    assert "restored 2 note(s)" in out
+    with open_db(Config().db_path) as conn:
+        row = conn.execute(
+            "SELECT description FROM libraries WHERE id = 'local/demo'"
+        ).fetchone()
+        assert row["description"] == "Demo documentation"
+        restored = {note.text: note for note in list_notes(conn, "local/demo")}
+        assert set(restored) == {
+            "Always use the retry helper for outbound calls.",
+            "The queue contract is stable.",
+        }
+        pinned = restored["Always use the retry helper for outbound calls."]
+        assert pinned.pinned is True
+        assert pinned.scope_version == "1.0"
+        anchors = [anchor["rel_path"] for anchor in note_anchors(conn, pinned.id)]
+        assert anchors == ["guide.md"]
 
 
 def test_import_is_idempotent(home, docs_dir, tmp_path, capsys):

@@ -33,6 +33,16 @@ pip install virtudoc
 Requires Python 3.11+. The only runtime dependencies are `markdown-it-py`
 (Markdown parsing) and the `mcp` SDK.
 
+A `Dockerfile` is included for an isolated setup that needs no Python on the
+host:
+
+```bash
+docker build -t virtudoc .
+docker run --rm -v virtudoc-data:/data virtudoc list
+```
+
+See [Docker](docs/installation.md#docker) for indexing, MCP and HTTP variants.
+
 Releases are built and published to PyPI by GitHub Actions on `v*` tags
 through OIDC trusted publishing — no tokens are stored in the repository.
 
@@ -84,9 +94,10 @@ virtudoc init .              # report only; add --link to create the links
 # Pull public documentation from a git URL or archive (the only networked command)
 virtudoc fetch --repo https://github.com/org/docs --name theirlib
 
-# Move your whole setup to another machine (see docs/installation.md)
-virtudoc export            # dump the library list to ~/.virtudoc/libraries.toml
-virtudoc import            # register and index everything from the file
+# Move libraries, descriptions and notes to another machine (see docs/installation.md)
+# Project links stay per-machine: recreate them with `virtudoc init --link`
+virtudoc export            # dump libraries, descriptions and notes to ~/.virtudoc/libraries.toml
+virtudoc import            # register and index everything from the file, notes included
 ```
 
 ## Connect your agent
