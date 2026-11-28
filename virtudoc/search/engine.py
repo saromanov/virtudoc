@@ -20,6 +20,8 @@ _SECTION_ARROW_RE = re.compile(r"\s*(?:→|->)\s*")
 
 TOPIC_BONUS = 0.25
 LANGUAGE_BONUS = 0.15
+# Trigram-only candidates rank below word-stage hits for the same query.
+TRIGRAM_PENALTY = 0.8
 # A topic prefix shorter than this matches too many unrelated headings.
 MIN_TOPIC_PREFIX = 4
 NO_SECTION = "(no section)"
@@ -126,14 +128,37 @@ def _stem(token: str) -> str:
     return token
 
 
+def _stem_alternative(token: str) -> str | None:
+    """Return the y→i prefix form of an English stem ("retry" → "retri").
+
+    Documents are indexed unstemmed, so a query "retry" must also look for
+    "retri*" to reach the indexed plural "retries".
+    """
+    stem = _stem(token)
+    if _LATIN_TOKEN_RE.fullmatch(stem) and len(stem) >= 4 and stem.endswith("y"):
+        return f"{stem[:-1]}i"
+    return None
+
+
 def _and_expression(tokens: list[str], prefix: bool = False) -> str:
     if not prefix:
         return " AND ".join(f'"{tok}"' for tok in tokens)
-    return " AND ".join(f"{_stem(tok)}*" for tok in tokens)
+    parts: list[str] = []
+    for tok in tokens:
+        stem = _stem(tok)
+        alternative = _stem_alternative(tok)
+        parts.append(f"({stem}* OR {alternative}*)" if alternative else f"{stem}*")
+    return " AND ".join(parts)
 
 
 def _or_expression(tokens: list[str]) -> str:
-    return " OR ".join(f'"{tok}" OR {_stem(tok)}*' for tok in tokens)
+    parts: list[str] = []
+    for tok in tokens:
+        parts.append(f'"{tok}" OR {_stem(tok)}*')
+        alternative = _stem_alternative(tok)
+        if alternative:
+            parts.append(f"{alternative}*")
+    return " OR ".join(parts)
 
 
 def _tri_expression(tokens: list[str]) -> str | None:
@@ -248,12 +273,76 @@ def _best_window(text: str, anchors: list[str], window_chars: int) -> tuple[int,
     end = min(len(text), start + window_chars)
     if start > 0:
         cut = text.find("\n", start, min(start + 60, end))
-        if cut != -1:
+        if cut != -1 and cut < hits[best_index]:
             start = cut + 1
     if end < len(text):
         cut = text.rfind("\n", max(end - 60, start), end)
         if cut > start:
             end = cut
+    return start, end
+
+
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+_BOUNDARY_LOOKAROUND = 80
+
+
+def _fenced_ranges(text: str) -> list[tuple[int, int]]:
+    """Character spans of fenced code blocks, opening and closing fences included."""
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    opened_at: int | None = None
+    for line in text.splitlines(keepends=True):
+        if _FENCE_RE.match(line):
+            if opened_at is None:
+                opened_at = offset
+            else:
+                ranges.append((opened_at, offset + len(line)))
+                opened_at = None
+        offset += len(line)
+    if opened_at is not None:
+        ranges.append((opened_at, len(text)))
+    return ranges
+
+
+def _snap_boundaries(text: str, start: int, end: int) -> tuple[int, int]:
+    """Move window edges to block then line boundaries, never inside a token."""
+    if start > 0:
+        low = max(0, start - _BOUNDARY_LOOKAROUND)
+        block = text.rfind("\n\n", low, start)
+        if block != -1:
+            start = block + 2
+        else:
+            line = text.rfind("\n", low, start)
+            if line != -1:
+                start = line + 1
+            else:
+                space = text.rfind(" ", low, start)
+                if space != -1:
+                    start = space + 1
+    if end < len(text):
+        high = min(len(text), end + _BOUNDARY_LOOKAROUND)
+        block = text.rfind("\n\n", max(start, end - _BOUNDARY_LOOKAROUND), end)
+        if block != -1:
+            end = block
+        else:
+            line = text.rfind("\n", max(start, end - _BOUNDARY_LOOKAROUND), end)
+            if line != -1:
+                end = line
+            else:
+                space = text.find(" ", end, high)
+                if space != -1:
+                    end = space
+    return start, end
+
+
+def _snap_window(text: str, start: int, end: int) -> tuple[int, int]:
+    """Never cut inside a fenced code block, then prefer block/line boundaries."""
+    start, end = _snap_boundaries(text, start, end)
+    for fence_start, fence_end in _fenced_ranges(text):
+        if fence_start < start < fence_end:
+            start = fence_start
+        if fence_start < end < fence_end:
+            end = fence_end
     return start, end
 
 
@@ -264,10 +353,26 @@ def trim_to_window(text: str, tokens: list[str], window_tokens: int) -> str:
     window_chars = window_tokens * CYRILLIC_CHARS_PER_TOKEN  # worst-case density
     anchors = sorted({form for tok in tokens for form in (tok, _stem(tok))})
     start, end = _best_window(text, anchors, window_chars)
+    start, end = _snap_window(text, start, end)
+    if end <= start:
+        end = min(len(text), start + window_chars)
     cut = text[start:end].strip("\n")
     prefix = "… " if start > 0 else ""
     suffix = " …" if end < len(text) else ""
     return f"{prefix}{cut}{suffix}"
+
+
+def _dedupe_snippets(snippets: list[Snippet]) -> list[Snippet]:
+    """Drop fragments whose text is contained in another returned fragment."""
+    return [
+        snippet
+        for snippet in snippets
+        if not any(
+            snippet.text != other.text and snippet.text in other.text
+            for other in snippets
+            if other is not snippet
+        )
+    ]
 
 
 def _page_snippets(
@@ -321,7 +426,7 @@ def _page_snippets(
             remaining -= est
             if remaining <= 0:
                 break
-    return snippets, cursor < len(scored)
+    return _dedupe_snippets(snippets), cursor < len(scored)
 
 
 def search(
@@ -350,22 +455,27 @@ def search(
         )
     if not candidates:
         candidates = _fetch_candidates(conn, _or_expression(tokens), library_id, section=section)
-    if not candidates:
-        trigram_match = _tri_expression(tokens)
-        if trigram_match:
-            candidates = _fetch_candidates(
-                conn,
-                trigram_match,
-                library_id,
-                section=section,
-                table="chunks_tri",
-            )
+
+    rows_by_id = {row["id"]: row for row in candidates}
+    trigram_match = _tri_expression(tokens)
+    if trigram_match:
+        for row in _fetch_candidates(
+            conn,
+            trigram_match,
+            library_id,
+            section=section,
+            table="chunks_tri",
+        ):
+            rows_by_id.setdefault(row["id"], row)
+    trigram_only = set(rows_by_id) - {row["id"] for row in candidates}
 
     scored: list[tuple[float, sqlite3.Row]] = []
-    for row in candidates:
+    for chunk_id, row in rows_by_id.items():
         # FTS5 bm25() returns a negative rank (more negative is better), so
         # its negation is a relevance score: larger means more relevant.
         score = max(0.0, -float(row["rank"]))
+        if chunk_id in trigram_only:
+            score *= TRIGRAM_PENALTY
         if _topic_boost(row, tokens):
             score *= 1.0 + TOPIC_BONUS
         if language and (row["lang"] or "").lower() == language.lower():

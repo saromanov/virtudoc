@@ -110,6 +110,43 @@ def test_overlap_disabled_and_empty_text():
     assert all(chunk.text for chunk in chunks)
 
 
+def test_code_blocks_rendered_with_fences():
+    text = "# T\n\n## Код\n\nПример.\n\n```python\nprint(1)\n```\n"
+    chunks = make_chunker().chunk(parse_markdown(text))
+    code_chunk = next(chunk for chunk in chunks if "print(1)" in chunk.text)
+    assert "```python\nprint(1)\n```" in code_chunk.text
+
+
+def test_overlap_tail_uses_whole_blocks():
+    from virtudoc.indexer.chunker import _overlap_tail
+
+    text = "Первый блок.\n\nВторой блок целиком. Второе предложение.\n\nТретий блок."
+    assert _overlap_tail(text, 1000) == text
+    small = _overlap_tail(text, 5)
+    assert text.endswith(small)
+    assert small.startswith("Третий блок.")
+
+
+def test_overlap_tail_keeps_whole_sentences():
+    from virtudoc.indexer.chunker import _overlap_tail
+
+    text = "Первый блок.\n\nОдно предложение. Второе предложение. Третье."
+    tail = _overlap_tail(text, 8)
+    assert text.endswith(tail)
+    assert tail.endswith("Третье.")
+    words = set(text.split())
+    assert all(word in words for word in tail.split())
+
+
+def test_overlap_tail_does_not_cut_tokens():
+    from virtudoc.indexer.chunker import _overlap_tail
+
+    text = " ".join(f"word{index}" for index in range(200))
+    tail = _overlap_tail(text, 10)
+    assert text.endswith(tail)
+    assert all(word in set(text.split()) for word in tail.split())
+
+
 def test_whitespace_only_document_produces_no_chunks():
     from virtudoc.indexer.chunker import Chunker
     from virtudoc.indexer.parsers import Block, ParsedDocument

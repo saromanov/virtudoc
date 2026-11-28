@@ -14,21 +14,29 @@ terminal and for agents calling `get-library-docs`.
      Russian words lose common noun/adjective endings, English words lose
      only inflectional suffixes (`-ing`, `-ed`, `-es`, `-s`, `-ies`), so
      `пакетная` finds `пакетной`, `запросов` finds `запросы`,
-     `configuring` finds `configured`. English words are never cut to an
-     arbitrary length: `assert` does not become a prefix of `assessment`;
-   - `OR` — any word is enough (ranked by relevance);
-   - trigram `OR` — a second index over the same chunks matches query
-     words as *substrings*, so subword hits inside compound identifiers
-     (`auth` inside `middlewareAuth`) still surface.
-4. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
+     `configuring` finds `configured`. An English stem ending in `y` also
+     matches its `i` form, so `retry` finds `retries` and `policy` finds
+     `policies`. English words are never cut to an arbitrary length:
+     `assert` does not become a prefix of `assessment`;
+   - `OR` — any word is enough (ranked by relevance).
+4. **Trigram merge.** A second index over the same chunks matches query
+   words as *substrings*, so subword hits inside compound identifiers
+   (`auth` inside `middlewareAuth`) still surface. This stage always runs
+   and its candidates are merged with the word-stage candidates by chunk:
+   a chunk found by both keeps its word-stage score, a trigram-only chunk
+   gets a modest score penalty, so it never outranks a word match.
+5. **Ranking.** Results are ordered by BM25. Chunks whose heading path or
    file name matches a query word on **token boundaries** get a topic
    boost; chunks containing code blocks in the requested `language` are
    promoted. A query word inside a longer unrelated word (`api` inside
    `Partial`) does not count as a topic match.
-5. **Assembly.** Long chunks are cut down to a window around the densest
+6. **Assembly.** Long chunks are cut down to a window around the densest
    cluster of query-term occurrences (`search.snippet_window_tokens`,
    400 by default, 0 disables the trimming) so the agent pays for the
-   relevant passage, not the whole page. Fragments are appended until the
+   relevant passage, not the whole page. A window is cut at block or line
+   boundaries and never inside a fenced code block. Fragments whose text
+   is contained in another fragment of the same page are dropped.
+   Fragments are appended until the
    token budget (default 5000) or the result limit (default 20) is
    reached. A page ends before a fragment that does not fit the remaining
    budget; a fragment larger than the whole budget is truncated to fit.

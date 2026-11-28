@@ -64,12 +64,16 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
    skipping hidden directories and files over 5 MB.
 2. `parsers` turn a file into a stream of blocks: headings (level + text),
    paragraphs, code blocks (with language). Markdown is parsed through
-   markdown-it-py via `token.map`, preserving the original text verbatim;
-   rst/txt/html use simplified line-based parsers.
+   markdown-it-py via `token.map`; prose keeps its original text, code blocks
+   keep their body and fence language so the chunker can re-emit them as
+   fenced Markdown. rst/txt/html use simplified line-based parsers.
 3. `chunker` groups blocks by heading path ("API → Middleware") and budget:
    target 600 tokens, hard limit 1200, 60-token overlap between adjacent
-   chunks. Code blocks are never split; an oversized paragraph is cut at
-   line boundaries with a "(continued)" marker.
+   chunks. Chunk text is Markdown: code blocks are re-wrapped in fences with
+   their recorded language. Code blocks are never split; an oversized
+   paragraph is cut at line boundaries with a "(continued)" marker. The
+   overlap is taken from whole trailing blocks or sentences, never from the
+   middle of a word.
 4. `indexer` compares the file hash against `documents`: unchanged — skip,
    changed — one transaction "delete old chunks, insert new ones", gone —
    remove from the index. Locking via `BEGIN IMMEDIATE` (a clear error on
@@ -82,11 +86,17 @@ virtudoc add / update                     Claude Code / Cursor (stdio)
    exact `AND` → prefix `AND` with ending stemming → `OR`.
    Prefix search covers Russian inflections that unicode61 does not fold
    (`пакетная` finds `пакетной`) — the answer to risk R-01 from the spec.
-3. Candidates are ranked by BM25; chunks whose heading path or file name
+   English `y` stems also emit the `y → i` prefix (`retry` finds `retries`).
+3. The trigram stage always runs alongside the word stages and its
+   candidates are merged by chunk id; a trigram-only candidate keeps a
+   modest score penalty, so subword hits surface without outranking word
+   matches.
+4. Candidates are ranked by BM25; chunks whose heading path or file name
    lexically matches query tokens receive a topic boost.
-4. Output is assembled under a token budget (default 5000) and a result
+5. Output is assembled under a token budget (default 5000) and a result
    limit (20); exceeding the budget is not an error — output is cut at a
-   chunk boundary with a 10% margin.
+   chunk boundary with a 10% margin. Fragments contained in another
+   fragment of the same page are dropped.
 
 ### Serving path: `get-library-docs`
 
