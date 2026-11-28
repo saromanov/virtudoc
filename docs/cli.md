@@ -233,6 +233,10 @@ virtudoc export [path]   # default: ~/.virtudoc/libraries.toml
 virtudoc import [path]
 ```
 
-`export` dumps the library list (names, paths, versions) to a TOML file.
-`import` registers and indexes every entry, replacing same-named libraries —
-safe to re-run. See [Team bootstrap](installation.md#team-bootstrap-one-file-one-command).
+`export` dumps the library list (names, paths, versions, channels,
+descriptions) and the project notes of each library (text, version scope,
+pin flag, document anchors) to a TOML file. Project links are per-machine and
+are not exported: recreate them with `virtudoc init --link`.
+`import` registers and indexes every entry, replacing same-named libraries and
+upserting their notes by text — safe to re-run. See
+[Team bootstrap](installation.md#team-bootstrap-one-file-one-command).

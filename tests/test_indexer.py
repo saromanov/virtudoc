@@ -200,6 +200,24 @@ def test_update_all(conn, docs_dir, tmp_path):
     assert set(results) == {"local/demo", "local/other"}
 
 
+def test_update_all_continues_after_missing_source(conn, docs_dir, tmp_path):
+    import shutil
+
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "index.md").write_text("# Другое\n\nСодержимое.\n", encoding="utf-8")
+    add_library(conn, docs_dir, "demo")
+    add_library(conn, other, "late")
+    index_library(conn, "local/demo", Chunker())
+    shutil.rmtree(other)
+    (docs_dir / "fresh.md").write_text("# Свежий\n\nНовый документ.\n", encoding="utf-8")
+    results = update_all(conn, Chunker())
+    assert set(results) == {"local/demo", "local/late"}
+    assert results["local/demo"].changed == 1
+    assert results["local/late"].errors == 1
+    assert "source directory unavailable" in results["local/late"].error
+
+
 def test_delete_library_removes_chunks(conn, docs_dir):
     lib_id = add_library(conn, docs_dir, "demo")
     index_library(conn, lib_id, Chunker())

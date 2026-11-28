@@ -48,6 +48,7 @@ class IndexStats:
     removed: int = 0
     errors: int = 0
     skipped_files: list[str] = field(default_factory=list)
+    error: str | None = None
 
     def summary(self) -> str:
         return (
@@ -298,7 +299,7 @@ def get_library(conn: sqlite3.Connection, name: str) -> sqlite3.Row:
 def list_libraries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT l.id, l.name, l.source_path, l.version, l.channel, l.updated_at,
+        SELECT l.id, l.name, l.source_path, l.description, l.version, l.channel, l.updated_at,
                (SELECT COUNT(*) FROM documents d WHERE d.library_id = l.id) AS doc_count,
                (SELECT COUNT(*) FROM chunks c WHERE c.library_id = l.id) AS chunk_count,
                (SELECT COALESCE(SUM(LENGTH(c.text)), 0) FROM chunks c
@@ -547,5 +548,9 @@ def update_all(conn: sqlite3.Connection, chunker: Chunker) -> dict[str, IndexSta
     results: dict[str, IndexStats] = {}
     rows = conn.execute("SELECT id FROM libraries ORDER BY id").fetchall()
     for row in rows:
-        results[row["id"]] = index_library(conn, row["id"], chunker)
+        try:
+            results[row["id"]] = index_library(conn, row["id"], chunker)
+        except (LibraryNotFoundError, IndexLockError, ValueError) as exc:
+            logger.error("failed to update %s: %s", row["id"], exc)
+            results[row["id"]] = IndexStats(errors=1, error=str(exc))
     return results

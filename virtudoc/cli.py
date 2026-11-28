@@ -33,6 +33,7 @@ from .notes import (
     SymbolRemovedError,
     add_note,
     edit_note,
+    list_notes,
     note_anchors,
     note_payload,
     note_statuses,
@@ -167,6 +168,8 @@ def cmd_update(args: argparse.Namespace, cfg: Config) -> int:
         return 0
     for lib_id, stats in results.items():
         print(f"{lib_id}: {stats.summary()}")
+        if stats.error:
+            print(f"error: {lib_id}: {stats.error}", file=sys.stderr)
         _print_skipped(stats.skipped_files)
     chunk_keys = [
         key
@@ -178,7 +181,7 @@ def cmd_update(args: argparse.Namespace, cfg: Config) -> int:
             "note: changed chunk.* settings only affect new indexing; "
             f"rebuild the index with: virtudoc reindex {args.name or '<name>'}"
         )
-    return 0
+    return 1 if any(stats.errors for stats in results.values()) else 0
 
 
 def cmd_reindex(args: argparse.Namespace, cfg: Config) -> int:
@@ -733,14 +736,52 @@ def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     return 0 if stats.errors == 0 else 1
 
 
+def _export_notes(conn: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
+    """Project notes of every logical library, keyed by library name."""
+    notes_by_name: dict[str, list[dict[str, object]]] = {}
+    for row in list_libraries(conn):
+        if row["name"] in notes_by_name:
+            continue
+        entries: list[dict[str, object]] = []
+        for note in list_notes(conn, row["id"]):
+            entry: dict[str, object] = {"text": note.text}
+            if note.scope_version:
+                entry["scope_version"] = note.scope_version
+            if note.pinned:
+                entry["pinned"] = True
+            anchors = [anchor["rel_path"] for anchor in note_anchors(conn, note.id)]
+            if anchors:
+                entry["anchors"] = list(dict.fromkeys(anchors))
+            entries.append(entry)
+        notes_by_name[row["name"]] = entries
+    return notes_by_name
+
+
+def _note_toml(note: dict, dumps) -> str:
+    """Render one exported note as a TOML inline table."""
+    parts = [f"text = {dumps(note['text'], ensure_ascii=False)}"]
+    if note.get("scope_version"):
+        parts.append(f"scope_version = {dumps(note['scope_version'], ensure_ascii=False)}")
+    if note.get("pinned"):
+        parts.append("pinned = true")
+    anchors = note.get("anchors")
+    if anchors:
+        rendered = ", ".join(dumps(anchor, ensure_ascii=False) for anchor in anchors)
+        parts.append(f"anchors = [{rendered}]")
+    return "{ " + ", ".join(parts) + " }"
+
+
 def cmd_export(args: argparse.Namespace, cfg: Config) -> int:
     import json
 
     with _open(cfg) as conn:
         rows = list_libraries(conn)
+        notes_by_name = _export_notes(conn)
     lines = [
         "# VirtuDoc libraries — restore with: virtudoc import",
         "# Paths are absolute; adjust after moving between machines if needed.",
+        "# Project links are per-machine and are not exported: recreate them with",
+        "# `virtudoc init --link` in each project after importing.",
         "",
     ]
     for row in rows:
@@ -751,12 +792,65 @@ def cmd_export(args: argparse.Namespace, cfg: Config) -> int:
             lines.append(f"version = {json.dumps(row['version'], ensure_ascii=False)}")
         if row["channel"] != "release":
             lines.append(f"channel = {json.dumps(row['channel'], ensure_ascii=False)}")
+        if row["description"]:
+            lines.append(f"description = {json.dumps(row['description'], ensure_ascii=False)}")
+        notes = notes_by_name.get(row["name"]) or []
+        if notes:
+            lines.append("notes = [")
+            lines.extend(f"    {_note_toml(note, json.dumps)}," for note in notes)
+            lines.append("]")
         lines.append("")
     out = Path(args.path) if args.path else data_dir() / "libraries.toml"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines), encoding="utf-8")
     print(f"exported {len(rows)} libraries to {out}")
     return 0
+
+
+def _restore_notes(conn: sqlite3.Connection, lib_id: str, entries: list) -> int:
+    existing = {note.text: note.id for note in list_notes(conn, lib_id)}
+    documents = {
+        row["rel_path"]
+        for row in conn.execute("SELECT rel_path FROM documents WHERE library_id = ?", (lib_id,))
+    }
+    restored = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            print(f"error: {lib_id}: malformed note: {entry!r}", file=sys.stderr)
+            continue
+        text = str(entry.get("text", "")).strip()
+        if not text:
+            print(f"error: {lib_id}: note without text", file=sys.stderr)
+            continue
+        scope_version = entry.get("scope_version")
+        scope_version = str(scope_version) if scope_version else None
+        pinned = bool(entry.get("pinned", False))
+        if text in existing:
+            conn.execute(
+                "UPDATE notes SET pinned = ?, scope_version = ? WHERE id = ?",
+                (1 if pinned else 0, scope_version, existing[text]),
+            )
+            conn.commit()
+            continue
+        anchors = entry.get("anchors")
+        if not isinstance(anchors, list):
+            anchors = []
+        paths = [str(anchor) for anchor in anchors if str(anchor) in documents]
+        try:
+            note_id = add_note(
+                conn,
+                lib_id,
+                text,
+                paths=paths or None,
+                scope_version=scope_version,
+                pinned=pinned,
+            )
+        except ValueError as exc:
+            print(f"error: {lib_id}: note: {exc}", file=sys.stderr)
+            continue
+        existing[text] = note_id
+        restored += 1
+    return restored
 
 
 def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
@@ -802,6 +896,7 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
                     name,
                     chunker=chunker,
                     version=str(lib["version"]) if lib.get("version") else None,
+                    description=str(lib["description"]) if lib.get("description") else None,
                     replace=True,
                     channel=str(lib.get("channel") or "release"),
                 )
@@ -811,6 +906,13 @@ def cmd_import(args: argparse.Namespace, cfg: Config) -> int:
                 continue
             imported += 1
             print(f"{lib_id}: {stats.summary()}")
+            entries = lib.get("notes") or []
+            if not isinstance(entries, list):
+                print(f"error: {name}: 'notes' must be a list of tables", file=sys.stderr)
+                continue
+            restored = _restore_notes(conn, lib_id, entries)
+            if restored:
+                print(f"{lib_id}: restored {restored} note(s)")
     print(f"imported: {imported}, failed: {failed}")
     return 1 if failed else 0
 

@@ -38,6 +38,65 @@ pip install -e '.[dev]'
 pytest
 ```
 
+## Docker
+
+The image ships the CLI and both MCP transports. All state stays in the
+`/data` volume (`VIRTUDOC_HOME=/data`), and the process runs as an
+unprivileged user (uid 10001), so nothing is written to the host outside the
+volume.
+
+```bash
+docker build -t virtudoc .
+docker volume create virtudoc-data
+
+# Index host documentation through a read-only mount
+docker run --rm -v virtudoc-data:/data -v "$PWD/docs:/docs:ro" \
+  virtudoc add /docs --name mylib
+
+# The rest of the CLI works unchanged
+docker run --rm -v virtudoc-data:/data virtudoc list
+docker run --rm -v virtudoc-data:/data virtudoc search "authentication errors"
+
+# Indexing and search need no network at all
+docker run --rm --network none -v virtudoc-data:/data virtudoc search "retry"
+```
+
+For an MCP client, run the container with stdin attached:
+
+```json
+{
+  "mcpServers": {
+    "virtudoc": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "virtudoc-data:/data", "virtudoc", "serve"]
+    }
+  }
+}
+```
+
+`virtudoc mcp-config` prints host paths (`/usr/local/bin/virtudoc`), so inside
+the container use the snippet above instead of its output.
+
+Streamable HTTP needs two things Docker makes non-obvious: a non-loopback
+bind (a server on `127.0.0.1` inside the container is unreachable from the
+host) and the bearer token that virtudoc requires for such a bind.
+`docker/config.toml` sets `http_host = "0.0.0.0"`, and `docker-compose.yml`
+publishes the port on the host loopback only:
+
+```bash
+export VIRTUDOC_HTTP_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose run --rm virtudoc add /docs --name mylib
+docker compose up -d
+```
+
+Then point the client at `http://127.0.0.1:8765/mcp` with
+`Authorization: Bearer $VIRTUDOC_HTTP_TOKEN`. See
+[MCP integration](mcp.md#streamable-http-and-authentication) for the
+transport itself.
+
+If you bind-mount a host directory at `/data` instead of using the named
+volume, make it writable by uid 10001 (`chown -R 10001 /path/to/data`).
+
 ## What gets created
 
 All data lives in `~/.virtudoc/`:
@@ -89,6 +148,12 @@ Import is idempotent: it replaces existing libraries with the same name and
 indexes only what changed, so re-running it after edits is always safe.
 Missing source directories are reported and skipped without aborting the
 rest.
+
+The setup file carries library names, absolute source paths, versions,
+channels and descriptions, plus project notes with their text, version scope,
+pin flag and document anchors. Project links are machine-specific and are not
+exported: recreate them with `virtudoc init --link <project>` in each project
+after importing. The exported file starts with a comment that says the same.
 
 Then connect your agent once (see [MCP integration](mcp.md)) — done. From
 here on, every agent session reindexes changed documentation automatically
