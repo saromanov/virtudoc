@@ -12,6 +12,7 @@ from virtudoc.versions import (
     link_library,
     list_manifests,
     mismatch_payload,
+    range_status,
     resolve_project_version,
     unlink_library,
     version_status,
@@ -541,3 +542,101 @@ class VehicleDetectorConan(ConanFile):
     assert resolved.version == "3.0.19"
     assert resolved.manifest_path.name == "conanfile.py"
     assert resolve_project_version(project, "mongoose.cpp-libs.tracking") is None
+
+
+def test_range_status_matches_a_version_inside_the_declared_range():
+    assert range_status(">=2.0", "2.5") == "match"
+    assert range_status(">=2.0,<3", "2.5") == "match"
+    assert range_status("~=2.5", "2.9") == "match"
+    assert range_status("!=1.9", "2.0") == "match"
+    assert range_status(">=2.0", "2.0.0") == "match"
+
+
+def test_range_status_flags_a_version_outside_the_declared_range():
+    assert range_status(">=2.0", "1.9") == "mismatch"
+    assert range_status(">=2.0,<3", "3.1") == "mismatch"
+    assert range_status("~=2.5", "3.0") == "mismatch"
+
+
+def test_range_status_keeps_exact_pin_semantics():
+    assert range_status("==2.0", "2.0.0") == "match"
+    assert range_status("==2.0", "2.5") == "mismatch"
+    assert range_status("2.0", "2.5") == "mismatch"
+
+
+def test_range_status_is_unknown_for_unevaluable_constraints():
+    assert range_status("*", "2.5") == "unknown"
+    assert range_status("latest", "2.5") == "unknown"
+    assert range_status("git+https://example.com/demo.git", "2.5") == "unknown"
+    assert range_status(">=2.0", "garbage") == "unknown"
+    assert range_status(None, "2.5") == "unknown"
+
+
+def test_resolve_project_version_keeps_the_declared_spec(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["demo>=2.0,<3"]\n', encoding="utf-8"
+    )
+    resolved = resolve_project_version(tmp_path, "demo")
+    assert resolved is not None
+    assert resolved.version == "2.0"
+    assert resolved.spec == ">=2.0,<3"
+
+
+def _project_with_requirement(tmp_path, requirement):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "requirements.txt").write_text(f"{requirement}\n", encoding="utf-8")
+    return project
+
+
+def test_mismatch_payload_accepts_docs_inside_the_declared_range(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = _project_with_requirement(tmp_path, "demo>=2.0")
+    assert mismatch_payload(conn, lib_id, project_path=project) is None
+
+
+def test_mismatch_payload_accepts_docs_inside_a_compound_range(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = _project_with_requirement(tmp_path, "demo>=2.0,<3")
+    assert mismatch_payload(conn, lib_id, project_path=project) is None
+
+
+def test_mismatch_payload_warns_when_docs_fall_outside_the_range(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="1.9")
+    index_library(conn, lib_id, Chunker())
+    project = _project_with_requirement(tmp_path, "demo>=2.0")
+    payload = mismatch_payload(conn, lib_id, project_path=project)
+    assert payload is not None
+    assert payload["documentation_version"] == "1.9"
+    assert payload["project_version"] == "2.0"
+
+
+def test_mismatch_payload_keeps_exact_pin_semantics(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = _project_with_requirement(tmp_path, "demo==2.0")
+    payload = mismatch_payload(conn, lib_id, project_path=project)
+    assert payload is not None
+    assert payload["documentation_version"] == "2.5"
+
+
+def test_mismatch_payload_ignores_an_unevaluable_constraint(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "package.json").write_text(
+        json.dumps({"dependencies": {"demo": "*"}}), encoding="utf-8"
+    )
+    assert mismatch_payload(conn, lib_id, project_path=project) is None
+
+
+def test_mismatch_payload_range_survives_the_link(conn, docs_dir, tmp_path):
+    lib_id = add_library(conn, docs_dir, "demo", version="2.5")
+    index_library(conn, lib_id, Chunker())
+    project = _project_with_requirement(tmp_path, "demo>=2.0")
+    info = link_library(conn, lib_id, project)
+    assert info.dep_version == "2.0"
+    assert mismatch_payload(conn, lib_id) is None

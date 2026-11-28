@@ -171,6 +171,21 @@ async def test_mcp_get_library_docs_budget(home_index):
 
 
 @pytest.mark.anyio
+async def test_mcp_get_library_docs_uses_configured_default_tokens(home_index):
+    from virtudoc.mcp_server import build_server
+
+    config = Config()
+    config.values["search.default_tokens"] = 150
+    payload = await build_server(config).call_tool(
+        "get-library-docs",
+        {"libraryId": "local/demo", "query": "middleware конвейер"},
+    )
+    data = json.loads(payload.content[0].text)
+    assert data["snippets"]
+    assert data["total_tokens"] <= 150
+
+
+@pytest.mark.anyio
 async def test_mcp_pagination_metadata(home, tmp_path):
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.toml").write_text("[search]\nmax_results = 2\n", encoding="utf-8")

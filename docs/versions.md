@@ -29,6 +29,14 @@ Versions are compared numerically and trailing zero components are ignored:
 `3.4` matches `3.4.0`. Unknown or unparseable versions yield `unknown` and
 produce no warning.
 
+A declared range is evaluated against the documentation version instead of
+being read as a pin: with `mylib>=2.0` the 2.5 docs match, while `>=2.0,<3`
+rejects 3.1. The `==`, `!=`, `>=`, `<=`, `>`, `<` and `~=` operators and
+comma-separated clauses are supported. Exact pins (`==2.0` or a bare `2.0`)
+keep exact-match semantics. A constraint that cannot be evaluated (`*`,
+`latest`, a git URL, a space-separated conan range) is unknown and produces
+no warning.
+
 A library can have one link; linking again replaces it.
 `virtudoc unlink mylib` removes the connection.
 

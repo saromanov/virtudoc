@@ -98,6 +98,7 @@ def build_server(config: Config) -> MCPServer:
         max_tokens=config.get_int("chunk.max_tokens"),
         overlap_tokens=config.get_int("chunk.overlap_tokens"),
     )
+    default_tokens = config.get_int("search.default_tokens")
 
     def connect() -> closing[sqlite3.Connection]:
         # sqlite3.Connection's own context manager only manages the
@@ -119,6 +120,7 @@ def build_server(config: Config) -> MCPServer:
                 libraryName,
                 query,
                 resolved_version=resolved.version if resolved else None,
+                resolved_spec=resolved.spec if resolved else None,
             )
             choices = library_version_choices(conn, libraryName)
             if not choices:
@@ -172,11 +174,17 @@ def build_server(config: Config) -> MCPServer:
                 )
         return payload
 
-    @server.tool(name="get-library-docs", description=GET_DOCS_DESCRIPTION)
+    @server.tool(
+        name="get-library-docs",
+        description=(
+            f"{GET_DOCS_DESCRIPTION} The default token budget is {default_tokens}, "
+            "taken from search.default_tokens; pass tokens to override it."
+        ),
+    )
     def get_library_docs(
         libraryId: str,
         query: str,
-        tokens: int = 5000,
+        tokens: int = default_tokens,
         language: str | None = None,
         page: int = 1,
         mode: str = "fragments",

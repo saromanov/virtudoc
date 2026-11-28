@@ -12,7 +12,7 @@ from .fetcher import PIN_FILE, read_pinned_branch
 from .indexer.indexer import load_index_failures
 from .notes import note_statuses
 from .tokens import estimate_tokens
-from .versions import extract_dep_version, version_status
+from .versions import dependency_status, extract_dep_spec, extract_dep_version, version_status
 
 GIT_TIMEOUT = 10
 
@@ -170,7 +170,8 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
             result.warn(f"{link['library_id']}: manifest missing: {manifest}")
             continue
         current = extract_dep_version(manifest, link["lib_name"])
-        status = version_status(link["doc_version"], current)
+        spec = extract_dep_spec(manifest, link["lib_name"])
+        status = dependency_status(link["doc_version"], spec, current)
         if current is None:
             result.warn(f"{link['library_id']}: dependency not found in {manifest.name} anymore")
         elif status == "mismatch":
@@ -179,7 +180,12 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 f"project {current} ({manifest.name}); stored: {link['dep_version']}"
             )
         else:
-            result.ok(f"{link['library_id']}: versions match ({link['doc_version']} == {current})")
+            matched = (
+                f"{link['doc_version']} == {current}"
+                if version_status(link["doc_version"], current) == "match"
+                else f"{link['doc_version']} satisfies {spec}"
+            )
+            result.ok(f"{link['library_id']}: versions match ({matched})")
 
     try:
         orphan_chunks = conn.execute(

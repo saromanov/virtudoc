@@ -12,7 +12,7 @@ from ..tokens import (
     estimate_tokens,
     truncate_to_tokens,
 )
-from ..versions import version_status
+from ..versions import dependency_status
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -564,12 +564,15 @@ def resolve_libraries(
     *,
     limit: int = 5,
     resolved_version: str | None = None,
+    resolved_spec: str | None = None,
 ) -> list[LibraryMatch]:
     """Rank libraries for a question, preferring the project's version.
 
     ``resolved_version`` comes from the consuming project's lockfile or
-    manifest. A matching indexed release outranks other versions of the same
-    name; an indexed working branch never outranks its release.
+    manifest, and ``resolved_spec`` is its raw declared constraint, so a
+    declared range accepts every indexed release inside it. A matching indexed
+    release outranks other versions of the same name; an indexed working branch
+    never outranks its release.
     """
     rows = conn.execute(
         """
@@ -608,7 +611,7 @@ def resolve_libraries(
             score = difflib.SequenceMatcher(None, needle, name).ratio() if needle else 0.0
         if row["id"] in hits:
             score += min(2.0, hits[row["id"]] / 10)
-        status = version_status(row["version"], resolved_version)
+        status = dependency_status(row["version"], resolved_spec, resolved_version)
         if resolved_version:
             if status == "match":
                 score += 3.0
@@ -631,7 +634,7 @@ def resolve_libraries(
             score=round(score, 4),
             version=row["version"],
             channel=row["channel"],
-            version_status=version_status(row["version"], resolved_version),
+            version_status=dependency_status(row["version"], resolved_spec, resolved_version),
         )
         for score, row in matches[:limit]
     ]
