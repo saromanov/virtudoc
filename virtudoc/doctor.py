@@ -179,6 +179,11 @@ def run_doctor(conn: sqlite3.Connection, cfg: Config) -> CheckResult:
                 f"{link['library_id']}: version drift — docs {link['doc_version']}, "
                 f"project {current} ({manifest.name}); stored: {link['dep_version']}"
             )
+        elif status == "unknown":
+            result.info(
+                f"{link['library_id']}: versions unknown — cannot evaluate {spec} "
+                f"against docs {link['doc_version']}, project {current} ({manifest.name})"
+            )
         else:
             matched = (
                 f"{link['doc_version']} == {current}"

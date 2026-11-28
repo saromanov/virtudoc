@@ -398,10 +398,13 @@ def _deps_from_poetry_section(data: dict) -> dict[str, str | None]:
 
 def _deps_from_package_json(path: Path) -> dict[str, str | None]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    declared: dict[str, str] = {}
+    declared: dict[str, object] = {}
     declared.update(data.get("dependencies", {}))
     declared.update(data.get("devDependencies", {}))
-    return {normalize_name(dep): spec for dep, spec in declared.items()}
+    return {
+        normalize_name(dep): spec if isinstance(spec, str) else None
+        for dep, spec in declared.items()
+    }
 
 
 def _deps_from_requirements(path: Path) -> dict[str, str | None]:
@@ -449,7 +452,7 @@ def _deps_from_pipfile_lock(path: Path) -> dict[str, str | None]:
     for section in ("default", "develop"):
         for dep, info in data.get(section, {}).items():
             spec = info.get("version") if isinstance(info, dict) else None
-            deps[normalize_name(dep)] = spec
+            deps[normalize_name(dep)] = spec if isinstance(spec, str) else None
     return deps
 
 

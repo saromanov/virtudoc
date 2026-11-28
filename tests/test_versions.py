@@ -8,6 +8,7 @@ from virtudoc.versions import (
     detect_manifest,
     extract_dep_version,
     extract_dependencies,
+    extract_dependency_specs,
     get_link,
     link_library,
     list_manifests,
@@ -304,6 +305,25 @@ def test_extract_dependencies_handles_broken_manifest(tmp_path):
     manifest.write_text("[project\n", encoding="utf-8")
     assert extract_dependencies(manifest) == {}
     assert extract_dependencies(tmp_path / "unknown.txt") == {}
+
+
+def test_extract_dependency_specs_skips_non_string_versions(tmp_path):
+    manifest = tmp_path / "package.json"
+    manifest.write_text(
+        '{"dependencies": {"demo": 2, "other": null, "third": "^1.0"}}', encoding="utf-8"
+    )
+    assert extract_dependency_specs(manifest) == {"demo": None, "other": None, "third": "^1.0"}
+    assert extract_dependencies(manifest) == {"demo": None, "other": None, "third": "1.0"}
+
+
+def test_extract_dependency_specs_skips_non_string_pipfile_lock_versions(tmp_path):
+    manifest = tmp_path / "Pipfile.lock"
+    manifest.write_text(
+        json.dumps({"default": {"demo": {"version": 2}, "other": {"version": "==1.0"}}}),
+        encoding="utf-8",
+    )
+    assert extract_dependency_specs(manifest) == {"demo": None, "other": "==1.0"}
+    assert extract_dependencies(manifest) == {"demo": None, "other": "1.0"}
 
 
 def test_extract_dependencies_from_go_mod_skips_directives(tmp_path):
